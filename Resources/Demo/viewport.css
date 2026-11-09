@@ -1,0 +1,5 @@
+body { margin: 0; background-color: #081629; color: #effaff; font-family: sans-serif; }
+.stripe { background-color: #19dbe9; width: 140px; height: 14px; }
+.content { padding: 24px; }
+h1 { font-size: 27px; margin: 0 0 20px 0; }
+p { font-size: 17px; }

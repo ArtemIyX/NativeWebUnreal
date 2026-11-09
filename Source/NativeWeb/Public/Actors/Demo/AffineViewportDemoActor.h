@@ -7,8 +7,9 @@
 class UGameViewportClient;
 class UTextureRenderTarget2D;
 class SWidget;
+class FAffineViewportDemoRenderer;
 
-/** Opt-in, solid-color presentation probe; does not yet render AffineUI. */
+/** Opt-in D3D11 viewport graphics probe. */
 UCLASS()
 class NATIVEWEB_API AAffineViewportDemoActor : public AActor
 {
@@ -22,8 +23,11 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	void SampleViewportDiagnostic();
+	FTimerHandle DiagnosticTimer;
 	UPROPERTY(Transient)
 	TObjectPtr<UTextureRenderTarget2D> RenderTarget;
 	TWeakObjectPtr<UGameViewportClient> ViewportClient;
 	TSharedPtr<SWidget> ViewportWidget;
+	FAffineViewportDemoRenderer* DemoRenderer = nullptr;
 };

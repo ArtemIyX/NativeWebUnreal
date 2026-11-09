@@ -6,6 +6,10 @@ public class NativeWeb : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine" });
-        PrivateDependencyModuleNames.AddRange(new string[] { "RHI", "Slate", "SlateCore" });
+        PrivateDependencyModuleNames.AddRange(new string[] { "AffineUnreal", "RHI", "RenderCore", "Slate", "SlateCore" });
+        if (Target.Platform == UnrealTargetPlatform.Win64)
+        {
+            PrivateDependencyModuleNames.Add("D3D11RHI");
+        }
     }
 }

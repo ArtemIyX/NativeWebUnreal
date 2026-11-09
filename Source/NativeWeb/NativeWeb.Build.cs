@@ -5,6 +5,7 @@ public class NativeWeb : ModuleRules
     public NativeWeb(ReadOnlyTargetRules Target) : base(Target)
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
-        PrivateDependencyModuleNames.Add("Core");
+        PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine" });
+        PrivateDependencyModuleNames.AddRange(new string[] { "RHI", "Slate", "SlateCore" });
     }
 }

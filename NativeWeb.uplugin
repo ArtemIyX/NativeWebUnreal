@@ -1,0 +1,38 @@
+{
+	"FileVersion": 3,
+	"Version": 5,
+	"VersionName": "1.5",
+	"FriendlyName": "NativeWeb",
+	"Description": "Native web runtime modules",
+	"Category": "Other",
+	"CreatedBy": "Wellsaik",
+	"CreatedByURL": "https://github.com/ArtemIyX",
+	"DocsURL": "https://github.com/ArtemIyX/WebUserInterfaceUnreal/wiki",
+	"MarketplaceURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "NativeWeb",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit"
+		},
+		{
+			"Name": "NativeWebWebSocketServer",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "NativeWebDispatch",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "NativeWebContentHttpServer",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

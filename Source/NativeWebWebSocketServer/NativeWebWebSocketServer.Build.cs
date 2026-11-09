@@ -1,0 +1,38 @@
+﻿using UnrealBuildTool;
+
+public class NativeWebWebSocketServer : ModuleRules
+{
+    public NativeWebWebSocketServer(ReadOnlyTargetRules Target) : base(Target)
+    {
+        PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
+
+        PublicDependencyModuleNames.AddRange(
+            new string[]
+            {
+                "Core",
+                "Engine",
+                "WebSockets",
+                "Sockets"
+            }
+        );
+
+        PrivateDependencyModuleNames.AddRange(
+            new string[]
+            {
+                "CoreUObject",
+                "NetCore",
+                "EngineSettings",
+                "ImageCore",
+                "PacketHandler",
+                "Json",
+                "JsonUtilities",
+                "Projects",
+                "OpenSSL",
+                "libWebSockets",
+                "zlib"
+            }
+        );
+
+        PublicDefinitions.Add("USE_LIBWEBSOCKET=1");
+    }
+}

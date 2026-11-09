@@ -1,0 +1,83 @@
+# Unreal Engine Plugin .gitignore
+# For a repo that contains only plugin sources (root is the plugin)
+
+# ============================================
+# Unreal Engine generated / build artifacts
+# ============================================
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+Build/
+*.uatbuildrecord
+*.csprojAssemblyReference.cache
+
+# Built data (usually regenerated)
+*_BuiltData.uasset
+
+# ============================================
+# Visual Studio / Visual Studio Code / Rider
+# ============================================
+.vs/
+.vscode/
+.idea/
+*.sln
+*.slnx
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.csproj.user
+.vsconfig
+*.DotSettings.user
+
+# ============================================
+# Compiled object / binary files
+# ============================================
+*.slo
+*.lo
+*.o
+*.obj
+*.gch
+*.pch
+*.so
+*.dylib
+*.dll
+*.lai
+*.la
+*.a
+*.lib
+*.exe
+*.out
+*.app
+*.ipa
+*.pdb
+*.ilk
+*.exp
+
+# ============================================
+# macOS / Windows / Linux junk
+# ============================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*~
+.directory
+
+# ============================================
+# Other common editor / temp files
+# ============================================
+*.log
+*.tmp
+*.bak
+*.swp
+*~.nib
+*.orig

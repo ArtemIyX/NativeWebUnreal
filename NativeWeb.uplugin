@@ -39,6 +39,10 @@
 		{
 			"Name": "AffineUnreal",
 			"Enabled": true
+		},
+		{
+			"Name": "QuickJSUnreal",
+			"Enabled": true
 		}
 	]
 }

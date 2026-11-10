@@ -65,7 +65,8 @@ public:
 		if (Ui) { affineui_ui_destroy(Ui); }
 	}
 
-	bool Render(FRHITexture* Output, FIntPoint Size, float DpiScale, FColor ClearColor, const FAffineUiContent& Content)
+	bool Render(FRHITexture* Output, FIntPoint Size, float DpiScale, FColor ClearColor, const FAffineUiContent& Content,
+		const TArray<FAffineUiTextMutation>& TextMutations)
 	{
 		if (!Output || !IsRHID3D11()) { return Fail(TEXT("D3D11 output is unavailable")); }
 		ID3D11DynamicRHI* Rhi = GetID3D11DynamicRHI();
@@ -130,15 +131,34 @@ public:
 			if (bAffineError)
 			{
 				affineui_ui_destroy(Ui); Ui = nullptr;
+				bHasContent = false; AppliedText.Reset();
 				DiscardRecordedCommands();
 				return Fail(TEXT("AffineUI initialization failed"));
 			}
 			UE_LOG(LogAffineUiSurfaceRender, Display, TEXT("AffineUI %s initialized on Unreal D3D11"), UTF8_TO_TCHAR(affineui_version()));
 		}
+		const bool bHtmlChanged = !bHasContent || LastHtml != Content.Html;
+		const bool bCssChanged = !bHasContent || LastCss != Content.Css;
 		const FTCHARToUTF8 Html(*Content.Html);
 		const FTCHARToUTF8 Css(*Content.Css);
-		affineui_ui_set_css(Ui, Css.Get());
-		affineui_ui_set_html(Ui, Html.Get());
+		if (bCssChanged) { affineui_ui_set_css(Ui, Css.Get()); LastCss = Content.Css; }
+		if (bHtmlChanged)
+		{
+			affineui_ui_set_html(Ui, Html.Get());
+			LastHtml = Content.Html;
+			AppliedText.Reset();
+		}
+		bHasContent = true;
+		for (const FAffineUiTextMutation& Mutation : TextMutations)
+		{
+			if (const FString* PreviousText = AppliedText.Find(Mutation.ElementId); PreviousText && *PreviousText == Mutation.Text) { continue; }
+			const FTCHARToUTF8 ElementId(*Mutation.ElementId);
+			const FTCHARToUTF8 Text(*Mutation.Text);
+			(void)affineui_ui_set_text(Ui, ElementId.Get(), Text.Get());
+			// The C API returns false both for an unknown id and for an unchanged value.
+			// Remember attempts so a stale id does not generate work on every redraw.
+			AppliedText.Add(Mutation.ElementId, Mutation.Text);
+		}
 		affineui_ui_set_clear_color(Ui, ClearColor.R, ClearColor.G, ClearColor.B, ClearColor.A);
 		affineui_frame_target Target{};
 		Target.width = Size.X; Target.height = Size.Y; Target.dpi_scale = DpiScale;
@@ -150,6 +170,7 @@ public:
 		{
 			// Discarded uploads can leave AffineUI's internal cache inconsistent.
 			affineui_ui_destroy(Ui); Ui = nullptr;
+			bHasContent = false; AppliedText.Reset();
 			DiscardRecordedCommands();
 			return Fail(TEXT("AffineUI draw reported an error"));
 		}
@@ -162,6 +183,7 @@ public:
 		{
 			// The deferred context is no longer trusted after a failed finish.
 			if (Ui) { affineui_ui_destroy(Ui); Ui = nullptr; }
+			bHasContent = false; AppliedText.Reset();
 			Context.SafeRelease();
 			return Fail(TEXT("FinishCommandList"), Result);
 		}
@@ -189,24 +211,31 @@ private:
 	}
 	TRefCountPtr<ID3D11DeviceContext> Context;
 	affineui_ui* Ui = nullptr;
+	FString LastHtml;
+	FString LastCss;
+	TMap<FString, FString> AppliedText;
+	bool bHasContent = false;
 };
 #else
 class FAffineUiSurfaceRenderer::FState {};
 #endif
 
 void FAffineUiSurfaceRenderer::Draw(FTextureRenderTargetResource* Target, FIntPoint Size, float DpiScale, FColor ClearColor,
-	FAffineUiContent Content, uint64 Revision, TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface)
+	FAffineUiContent Content, uint64 Revision, TArray<FAffineUiTextMutation> TextMutations,
+	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface)
 {
-	ENQUEUE_RENDER_COMMAND(AffineSurfaceDraw)([this, Target, Size, DpiScale, ClearColor, Content = MoveTemp(Content), Revision, Surface](FRHICommandListImmediate& RHICmdList) mutable
+	ENQUEUE_RENDER_COMMAND(AffineSurfaceDraw)([this, Target, Size, DpiScale, ClearColor, Content = MoveTemp(Content),
+		TextMutations = MoveTemp(TextMutations), Revision, Surface](FRHICommandListImmediate& RHICmdList) mutable
 	{
 		FTextureRHIRef Output;
 		if (Target) { Output = Target->GetRenderTargetTexture(); }
-		RHICmdList.EnqueueLambda([this, Output, Size, DpiScale, ClearColor, Content = MoveTemp(Content), Revision, Surface](FRHICommandListBase&)
+		RHICmdList.EnqueueLambda([this, Output, Size, DpiScale, ClearColor, Content = MoveTemp(Content),
+			TextMutations = MoveTemp(TextMutations), Revision, Surface](FRHICommandListBase&)
 		{
 			bool bSuccess = false;
 #if PLATFORM_WINDOWS
 			if (!State) { State = new FState(); }
-			bSuccess = State->Render(Output.GetReference(), Size, DpiScale, ClearColor, Content);
+			bSuccess = State->Render(Output.GetReference(), Size, DpiScale, ClearColor, Content, TextMutations);
 #endif
 			AsyncTask(ENamedThreads::GameThread, [Surface, Revision, bSuccess]()
 			{

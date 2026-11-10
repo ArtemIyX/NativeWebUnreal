@@ -75,6 +75,7 @@ public:
 	FString LastError;
 	uint64 DesiredRevision = 1;
 	uint64 PendingRevision = 0;
+	TMap<FString, FString> LiveTextUpdates;
 	bool bInFlight = false;
 	bool bDirty = true;
 	bool bClosed = false;
@@ -178,6 +179,14 @@ bool FAffineUiSurface::RequestRedraw()
 	return true;
 }
 
+bool FAffineUiSurface::SetTextById(const FString& ElementId, const FString& Text)
+{
+	check(IsInGameThread());
+	if (Impl->bClosed || ElementId.IsEmpty() || ContainsEmbeddedNull(ElementId) || ContainsEmbeddedNull(Text)) { return false; }
+	Impl->LiveTextUpdates.Add(ElementId, Text);
+	return RequestRedraw();
+}
+
 void FAffineUiSurface::SetOnTextureReady(FAffineUiTextureReady Callback)
 {
 	check(IsInGameThread());
@@ -245,8 +254,16 @@ void FAffineUiSurface::StartPending()
 	Impl->PendingRevision = Impl->DesiredRevision;
 	Impl->bInFlight = true;
 	Impl->bDirty = false;
+	TArray<FAffineUiTextMutation> TextMutations;
+	TextMutations.Reserve(Impl->LiveTextUpdates.Num());
+	for (const TPair<FString, FString>& Pair : Impl->LiveTextUpdates)
+	{
+		FAffineUiTextMutation& Mutation = TextMutations.AddDefaulted_GetRef();
+		Mutation.ElementId = Pair.Key;
+		Mutation.Text = Pair.Value;
+	}
 	Impl->Renderer.Draw(Target->GameThread_GetRenderTargetResource(), Impl->Desired.PixelSize,
-		Impl->Desired.DpiScale, Impl->Desired.ClearColor, Impl->Desired.Content, Impl->PendingRevision, AsShared());
+		Impl->Desired.DpiScale, Impl->Desired.ClearColor, Impl->Desired.Content, Impl->PendingRevision, MoveTemp(TextMutations), AsShared());
 }
 
 void FAffineUiSurface::OnRenderComplete(uint64 Revision, bool bSuccess)
@@ -315,6 +332,7 @@ void FAffineUiSurface::Close()
 		Impl->RetirementTicker.Reset();
 	}
 	Impl->Renderer.Shutdown();
+	Impl->LiveTextUpdates.Reset();
 	Impl->Pending.Reset();
 	Impl->Output.Reset();
 	Impl->Retired.Reset();

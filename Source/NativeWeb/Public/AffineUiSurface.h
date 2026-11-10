@@ -14,6 +14,13 @@ struct NATIVEWEB_API FAffineUiContent
 	FString Css;
 };
 
+/** Copied text update applied on the AffineUI renderer's owner lane. */
+struct NATIVEWEB_API FAffineUiTextMutation
+{
+	FString ElementId;
+	FString Text;
+};
+
 struct NATIVEWEB_API FAffineUiSurfaceDesc
 {
 	FIntPoint PixelSize = FIntPoint(480, 240);
@@ -40,6 +47,8 @@ public:
 	/** Queue a new target; the previous output remains published until the replacement is ready. */
 	bool Resize(FIntPoint PixelSize, float DpiScale = 1.0f);
 	bool RequestRedraw();
+	/** Queue textContent replacement for an existing element ID without replacing HTML. True means queued, not yet rendered. */
+	bool SetTextById(const FString& ElementId, const FString& Text);
 
 	/** The callback runs on the game thread after each successful texture publication. */
 	void SetOnTextureReady(FAffineUiTextureReady Callback);

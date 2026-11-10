@@ -6,6 +6,10 @@ public class NativeWeb : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine" });
+        if (Target.Platform == UnrealTargetPlatform.Win64)
+        {
+            PublicDependencyModuleNames.Add("QuickJSUnreal");
+        }
         PrivateDependencyModuleNames.AddRange(new string[] { "AffineUnreal", "RHI", "RenderCore", "Slate", "SlateCore" });
         if (Target.Platform == UnrealTargetPlatform.Win64)
         {

@@ -76,6 +76,8 @@ public:
 	uint64 DesiredRevision = 1;
 	uint64 PendingRevision = 0;
 	TMap<FString, FString> LiveTextUpdates;
+	TArray<FAffineUiMutation> PendingMutations;
+	uint64 DocumentEpoch = 1;
 	bool bInFlight = false;
 	bool bDirty = true;
 	bool bClosed = false;
@@ -125,6 +127,12 @@ bool FAffineUiSurface::SetContent(const FAffineUiContent& Content)
 {
 	check(IsInGameThread());
 	if (Impl->bClosed || ContainsEmbeddedNull(Content.Html) || ContainsEmbeddedNull(Content.Css)) { return false; }
+	if (Impl->Desired.Content.Html != Content.Html)
+	{
+		++Impl->DocumentEpoch;
+		Impl->PendingMutations.Reset();
+		Impl->LiveTextUpdates.Reset();
+	}
 	Impl->Desired.Content = Content;
 	++Impl->DesiredRevision;
 	Impl->bDirty = true;
@@ -185,6 +193,21 @@ bool FAffineUiSurface::SetTextById(const FString& ElementId, const FString& Text
 	if (Impl->bClosed || ElementId.IsEmpty() || ContainsEmbeddedNull(ElementId) || ContainsEmbeddedNull(Text)) { return false; }
 	Impl->LiveTextUpdates.Add(ElementId, Text);
 	return RequestRedraw();
+}
+
+bool FAffineUiSurface::QueueMutation(const FAffineUiMutation& Mutation)
+{
+	check(IsInGameThread());
+	if (Impl->bClosed || Mutation.DocumentEpoch != Impl->DocumentEpoch ||
+		ContainsEmbeddedNull(Mutation.Name) || ContainsEmbeddedNull(Mutation.Value)) { return false; }
+	Impl->PendingMutations.Add(Mutation);
+	return RequestRedraw();
+}
+
+uint64 FAffineUiSurface::GetDocumentEpoch() const
+{
+	check(IsInGameThread());
+	return Impl->DocumentEpoch;
 }
 
 void FAffineUiSurface::SetOnTextureReady(FAffineUiTextureReady Callback)
@@ -262,8 +285,11 @@ void FAffineUiSurface::StartPending()
 		Mutation.ElementId = Pair.Key;
 		Mutation.Text = Pair.Value;
 	}
+	TArray<FAffineUiMutation> Mutations = MoveTemp(Impl->PendingMutations);
+	Impl->PendingMutations.Reset();
 	Impl->Renderer.Draw(Target->GameThread_GetRenderTargetResource(), Impl->Desired.PixelSize,
-		Impl->Desired.DpiScale, Impl->Desired.ClearColor, Impl->Desired.Content, Impl->PendingRevision, MoveTemp(TextMutations), AsShared());
+		Impl->Desired.DpiScale, Impl->Desired.ClearColor, Impl->Desired.Content, Impl->PendingRevision,
+		MoveTemp(TextMutations), MoveTemp(Mutations), Impl->DocumentEpoch, AsShared());
 }
 
 void FAffineUiSurface::OnRenderComplete(uint64 Revision, bool bSuccess)
@@ -333,6 +359,7 @@ void FAffineUiSurface::Close()
 	}
 	Impl->Renderer.Shutdown();
 	Impl->LiveTextUpdates.Reset();
+	Impl->PendingMutations.Reset();
 	Impl->Pending.Reset();
 	Impl->Output.Reset();
 	Impl->Retired.Reset();

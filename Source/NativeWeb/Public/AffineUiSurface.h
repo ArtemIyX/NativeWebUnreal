@@ -21,6 +21,24 @@ struct NATIVEWEB_API FAffineUiTextMutation
 	FString Text;
 };
 
+enum class EAffineUiMutationKind : uint8
+{
+	MountRoot, CreateElement, CreateText, CreateComment, InsertBefore, Remove,
+	SetText, SetAttribute, RemoveAttribute
+};
+
+/** Copied game-thread command; strings and logical IDs cross to the RHI lane. */
+struct NATIVEWEB_API FAffineUiMutation
+{
+	uint64 DocumentEpoch = 0;
+	uint64 NodeId = 0;
+	uint64 ParentId = 0;
+	uint64 BeforeId = 0;
+	EAffineUiMutationKind Kind = EAffineUiMutationKind::MountRoot;
+	FString Name;
+	FString Value;
+};
+
 struct NATIVEWEB_API FAffineUiSurfaceDesc
 {
 	FIntPoint PixelSize = FIntPoint(480, 240);
@@ -49,6 +67,8 @@ public:
 	bool RequestRedraw();
 	/** Queue textContent replacement for an existing element ID without replacing HTML. True means queued, not yet rendered. */
 	bool SetTextById(const FString& ElementId, const FString& Text);
+	bool QueueMutation(const FAffineUiMutation& Mutation);
+	uint64 GetDocumentEpoch() const;
 
 	/** The callback runs on the game thread after each successful texture publication. */
 	void SetOnTextureReady(FAffineUiTextureReady Callback);

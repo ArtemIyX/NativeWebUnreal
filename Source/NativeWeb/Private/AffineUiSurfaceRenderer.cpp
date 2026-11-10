@@ -66,7 +66,8 @@ public:
 	}
 
 	bool Render(FRHITexture* Output, FIntPoint Size, float DpiScale, FColor ClearColor, const FAffineUiContent& Content,
-		const TArray<FAffineUiTextMutation>& TextMutations)
+		const TArray<FAffineUiTextMutation>& TextMutations,
+		const TArray<FAffineUiMutation>& Mutations, uint64 InDocumentEpoch)
 	{
 		if (!Output || !IsRHID3D11()) { return Fail(TEXT("D3D11 output is unavailable")); }
 		ID3D11DynamicRHI* Rhi = GetID3D11DynamicRHI();
@@ -147,8 +148,77 @@ public:
 			affineui_ui_set_html(Ui, Html.Get());
 			LastHtml = Content.Html;
 			AppliedText.Reset();
+			NodeHandles.Reset();
+		}
+		if (DocumentEpoch != InDocumentEpoch)
+		{
+			NodeHandles.Reset();
+			DocumentEpoch = InDocumentEpoch;
 		}
 		bHasContent = true;
+		if (!Mutations.IsEmpty())
+		{
+			affineui_ui_begin_node_mutations(Ui);
+			bool bMutationSuccess = true;
+			for (const FAffineUiMutation& Mutation : Mutations)
+			{
+				if (Mutation.DocumentEpoch != DocumentEpoch) { bMutationSuccess = false; break; }
+				affineui_dom_handle Node = Resolve(Mutation.NodeId);
+				affineui_dom_handle Parent = Resolve(Mutation.ParentId);
+				affineui_dom_handle Before = Resolve(Mutation.BeforeId);
+				const FTCHARToUTF8 Name(*Mutation.Name);
+				const FTCHARToUTF8 Value(*Mutation.Value);
+				switch (Mutation.Kind)
+				{
+				case EAffineUiMutationKind::MountRoot:
+					Node = affineui_ui_mount_root(Ui, Name.Get());
+					bMutationSuccess = IsValidHandle(Node);
+					if (bMutationSuccess) NodeHandles.Add(Mutation.NodeId, Node);
+					break;
+				case EAffineUiMutationKind::CreateElement:
+					Node = affineui_ui_create_node(Ui, AFFINEUI_DOM_ELEMENT, Name.Get());
+					bMutationSuccess = IsValidHandle(Node);
+					if (bMutationSuccess) NodeHandles.Add(Mutation.NodeId, Node);
+					break;
+				case EAffineUiMutationKind::CreateText:
+					Node = affineui_ui_create_node(Ui, AFFINEUI_DOM_TEXT, Value.Get());
+					bMutationSuccess = IsValidHandle(Node);
+					if (bMutationSuccess) NodeHandles.Add(Mutation.NodeId, Node);
+					break;
+				case EAffineUiMutationKind::CreateComment:
+					Node = affineui_ui_create_node(Ui, AFFINEUI_DOM_COMMENT, Value.Get());
+					bMutationSuccess = IsValidHandle(Node);
+					if (bMutationSuccess) NodeHandles.Add(Mutation.NodeId, Node);
+					break;
+				case EAffineUiMutationKind::InsertBefore:
+					bMutationSuccess = affineui_ui_insert_node(Ui, Parent, Node, Before) != 0;
+					break;
+				case EAffineUiMutationKind::Remove:
+					bMutationSuccess = affineui_ui_remove_node(Ui, Node) != 0;
+					if (bMutationSuccess) PruneInvalidHandles();
+					break;
+				case EAffineUiMutationKind::SetText:
+					bMutationSuccess = affineui_ui_node_set_text(Ui, Node, Value.Get()) != 0;
+					break;
+				case EAffineUiMutationKind::SetAttribute:
+					bMutationSuccess = affineui_ui_node_set_attr(Ui, Node, Name.Get(), Value.Get()) != 0;
+					break;
+				case EAffineUiMutationKind::RemoveAttribute:
+					bMutationSuccess = affineui_ui_node_remove_attr(Ui, Node, Name.Get()) != 0;
+					break;
+				}
+				if (!bMutationSuccess) break;
+			}
+			affineui_ui_end_node_mutations(Ui);
+			if (!bMutationSuccess)
+			{
+				// A partial batch cannot safely be replayed; discard its document and identity map.
+				affineui_ui_destroy(Ui); Ui = nullptr;
+				bHasContent = false; AppliedText.Reset(); NodeHandles.Reset();
+				DiscardRecordedCommands();
+				return Fail(TEXT("AffineUI mutation batch failed; surface state was reset"));
+			}
+		}
 		for (const FAffineUiTextMutation& Mutation : TextMutations)
 		{
 			if (const FString* PreviousText = AppliedText.Find(Mutation.ElementId); PreviousText && *PreviousText == Mutation.Text) { continue; }
@@ -192,6 +262,19 @@ public:
 	}
 
 private:
+	affineui_dom_handle Resolve(uint64 Id) const
+	{
+		if (Id == 0) return {};
+		if (const affineui_dom_handle* Handle = NodeHandles.Find(Id)) return *Handle;
+		return {};
+	}
+	static bool IsValidHandle(affineui_dom_handle Handle) { return Handle.document_id != 0 && Handle.generation != 0; }
+	void PruneInvalidHandles()
+	{
+		for (auto It = NodeHandles.CreateIterator(); It; ++It)
+			if (!affineui_ui_node_valid(Ui, It.Value())) It.RemoveCurrent();
+	}
+
 	void DiscardRecordedCommands()
 	{
 		if (!Context) { return; }
@@ -214,6 +297,8 @@ private:
 	FString LastHtml;
 	FString LastCss;
 	TMap<FString, FString> AppliedText;
+	TMap<uint64, affineui_dom_handle> NodeHandles;
+	uint64 DocumentEpoch = 0;
 	bool bHasContent = false;
 };
 #else
@@ -222,20 +307,21 @@ class FAffineUiSurfaceRenderer::FState {};
 
 void FAffineUiSurfaceRenderer::Draw(FTextureRenderTargetResource* Target, FIntPoint Size, float DpiScale, FColor ClearColor,
 	FAffineUiContent Content, uint64 Revision, TArray<FAffineUiTextMutation> TextMutations,
+	TArray<FAffineUiMutation> Mutations, uint64 DocumentEpoch,
 	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface)
 {
 	ENQUEUE_RENDER_COMMAND(AffineSurfaceDraw)([this, Target, Size, DpiScale, ClearColor, Content = MoveTemp(Content),
-		TextMutations = MoveTemp(TextMutations), Revision, Surface](FRHICommandListImmediate& RHICmdList) mutable
+		TextMutations = MoveTemp(TextMutations), Mutations = MoveTemp(Mutations), DocumentEpoch, Revision, Surface](FRHICommandListImmediate& RHICmdList) mutable
 	{
 		FTextureRHIRef Output;
 		if (Target) { Output = Target->GetRenderTargetTexture(); }
 		RHICmdList.EnqueueLambda([this, Output, Size, DpiScale, ClearColor, Content = MoveTemp(Content),
-			TextMutations = MoveTemp(TextMutations), Revision, Surface](FRHICommandListBase&)
+			TextMutations = MoveTemp(TextMutations), Mutations = MoveTemp(Mutations), DocumentEpoch, Revision, Surface](FRHICommandListBase&)
 		{
 			bool bSuccess = false;
 #if PLATFORM_WINDOWS
 			if (!State) { State = new FState(); }
-			bSuccess = State->Render(Output.GetReference(), Size, DpiScale, ClearColor, Content, TextMutations);
+			bSuccess = State->Render(Output.GetReference(), Size, DpiScale, ClearColor, Content, TextMutations, Mutations, DocumentEpoch);
 #endif
 			AsyncTask(ENamedThreads::GameThread, [Surface, Revision, bSuccess]()
 			{

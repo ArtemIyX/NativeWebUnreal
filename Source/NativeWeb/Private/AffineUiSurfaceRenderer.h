@@ -12,6 +12,7 @@ public:
 	void Draw(FTextureRenderTargetResource* Target, FIntPoint Size, float DpiScale, FColor ClearColor,
 		FAffineUiContent Content, uint64 Revision,
 		TArray<FAffineUiTextMutation> TextMutations,
+		TArray<FAffineUiMutation> Mutations, uint64 DocumentEpoch,
 		TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface);
 	void Shutdown();
 

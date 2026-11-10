@@ -22,8 +22,23 @@ public:
 private:
 	FAffineUiScriptInstance() = default;
 	static JSValue SetText(JSContext* Context, JSValueConst ThisValue, int32 ArgCount, JSValueConst* Args);
+	static JSValue MountRoot(JSContext* Context, JSValueConst ThisValue, int32 ArgCount, JSValueConst* Args);
+	static JSValue CreateElement(JSContext* Context, JSValueConst ThisValue, int32 ArgCount, JSValueConst* Args);
+	static JSValue CreateText(JSContext* Context, JSValueConst ThisValue, int32 ArgCount, JSValueConst* Args);
+	static JSValue CreateComment(JSContext* Context, JSValueConst ThisValue, int32 ArgCount, JSValueConst* Args);
+	static JSValue InsertBefore(JSContext* Context, JSValueConst ThisValue, int32 ArgCount, JSValueConst* Args);
+	static JSValue RemoveNode(JSContext* Context, JSValueConst ThisValue, int32 ArgCount, JSValueConst* Args);
+	static JSValue SetNodeText(JSContext* Context, JSValueConst ThisValue, int32 ArgCount, JSValueConst* Args);
+	static JSValue SetAttribute(JSContext* Context, JSValueConst ThisValue, int32 ArgCount, JSValueConst* Args);
+	static JSValue RemoveAttribute(JSContext* Context, JSValueConst ThisValue, int32 ArgCount, JSValueConst* Args);
+	static JSValue CreateNode(JSContext* Context, int32 ArgCount, JSValueConst* Args, EAffineUiMutationKind Kind);
+	static JSValue QueueCommand(JSContext* Context, int32 ArgCount, JSValueConst* Args, EAffineUiMutationKind Kind);
+	uint64 AllocateNodeId();
+	bool Queue(const FAffineUiMutation& Mutation);
 	static FString ReadString(JSContext* Context, JSValueConst Value, bool& bOutValid);
 	TUniquePtr<FQuickJSRuntime> Runtime;
 	TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface;
+	uint64 DocumentEpoch = 0;
+	uint64 NextNodeId = 1;
 };
 #endif // PLATFORM_WINDOWS

@@ -36,7 +36,7 @@ TUniquePtr<FAffineUiScriptInstance> FAffineUiScriptInstance::Create(const FAffin
 	JS_SetPropertyStr(Context, Api, "mountRoot",
 	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::MountRoot, "mountRoot", 1));
 	JS_SetPropertyStr(Context, Api, "createElement",
-	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::CreateElement, "createElement", 1));
+	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::CreateElement, "createElement", 2));
 	JS_SetPropertyStr(Context, Api, "createText",
 	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::CreateText, "createText", 1));
 	JS_SetPropertyStr(Context, Api, "createComment",
@@ -51,6 +51,8 @@ TUniquePtr<FAffineUiScriptInstance> FAffineUiScriptInstance::Create(const FAffin
 	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::SetAttribute, "setAttribute", 3));
 	JS_SetPropertyStr(Context, Api, "removeAttribute",
 	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::RemoveAttribute, "removeAttribute", 2));
+	JS_SetPropertyStr(Context, Api, "setClickHandler",
+	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::SetClickHandler, "setClickHandler", 1));
 	JS_SetPropertyStr(Context, Global, "nativeWeb", Api);
 	JS_FreeValue(Context, Global);
 	return Instance;
@@ -65,7 +67,8 @@ FAffineUiScriptInstance::~FAffineUiScriptInstance()
 	Close();
 }
 
-bool FAffineUiScriptInstance::Evaluate(const FString& Source, FQuickJSError& OutError)
+bool FAffineUiScriptInstance::Evaluate(const FString& Source, FQuickJSError& OutError,
+	                                   const FString& SourceName)
 {
 	check(IsInGameThread());
 	if (!Runtime || !Runtime->IsOpen())
@@ -74,12 +77,42 @@ bool FAffineUiScriptInstance::Evaluate(const FString& Source, FQuickJSError& Out
 		return false;
 	}
 	JSValue Result = JS_UNDEFINED;
-	if (!Runtime->Evaluate(Source, TEXT("<nativeweb-fixture>"), EQuickJSSourceType::Script, Result, OutError))
+	if (!Runtime->Evaluate(Source, SourceName, EQuickJSSourceType::Script, Result, OutError))
 	{
 		return false;
 	}
 	JS_FreeValue(Runtime->GetContext(), Result);
 	return true;
+}
+
+bool FAffineUiScriptInstance::DispatchClick(uint64 NodeId, FQuickJSError& OutError)
+{
+	check(IsInGameThread());
+	if (!Runtime || !Runtime->IsOpen() || !Surface || Surface->GetDocumentEpoch() != DocumentEpoch)
+	{
+		return true;
+	}
+	JSContext* Context = Runtime->GetContext();
+	JSValue Global = JS_GetGlobalObject(Context);
+	JSValue Handler = JS_GetPropertyStr(Context, Global, "__nativeWebClick");
+	JS_FreeValue(Context, Global);
+	if (JS_IsException(Handler))
+	{
+		Runtime->TakeException(OutError);
+		return false;
+	}
+
+	bool bSuccess = true;
+	if (JS_IsFunction(Context, Handler))
+	{
+		JSValue Argument = JS_NewInt64(Context, static_cast<int64>(NodeId));
+		JSValue Result = JS_UNDEFINED;
+		bSuccess = Runtime->Call(Handler, JS_UNDEFINED, 1, &Argument, Result, OutError);
+		JS_FreeValue(Context, Argument);
+		JS_FreeValue(Context, Result);
+	}
+	JS_FreeValue(Context, Handler);
+	return bSuccess;
 }
 
 bool FAffineUiScriptInstance::PumpJobs(int32 MaxJobs, int32& OutExecuted, bool& bOutPending, FQuickJSError& OutError)
@@ -146,11 +179,25 @@ bool FAffineUiScriptInstance::Queue(const FAffineUiMutation& Mutation)
 
 JSValue FAffineUiScriptInstance::CreateNode(JSContext* C, int32 N, JSValueConst* A, EAffineUiMutationKind Kind)
 {
-	if (N != 1 || !JS_IsString(A[0])) return JS_ThrowTypeError(C, "node creation expects one string");
+	const bool bElement = Kind == EAffineUiMutationKind::CreateElement;
+	if (N < 1 || N > (bElement ? 2 : 1) || !JS_IsString(A[0]))
+	{
+		return JS_ThrowTypeError(C, "node creation expects a string and an optional SVG namespace for elements");
+	}
+	if (N == 2 && !JS_IsUndefined(A[1]))
+	{
+		bool bValidNamespace = false;
+		if (!JS_IsString(A[1]) || ReadString(C, A[1], bValidNamespace) != TEXT("svg") || !bValidNamespace)
+		{
+			if (JS_HasException(C)) return JS_EXCEPTION;
+			return JS_ThrowTypeError(C, "the supported element namespace is svg");
+		}
+		Kind = EAffineUiMutationKind::CreateSvgElement;
+	}
 	bool Valid = false;
 	FString Value = ReadString(C, A[0], Valid);
 	if (JS_HasException(C)) return JS_EXCEPTION;
-	if (!Valid || (Kind == EAffineUiMutationKind::CreateElement && Value.IsEmpty())) return JS_ThrowTypeError(
+	if (!Valid || (bElement && Value.IsEmpty())) return JS_ThrowTypeError(
 		C, "node value is invalid");
 	auto* I = static_cast<FAffineUiScriptInstance*>(JS_GetContextOpaque(C));
 	if (!I) return JS_ThrowInternalError(C, "script instance is closed");
@@ -159,7 +206,7 @@ JSValue FAffineUiScriptInstance::CreateNode(JSContext* C, int32 N, JSValueConst*
 	M.DocumentEpoch = I->DocumentEpoch;
 	M.NodeId = Id;
 	M.Kind = Kind;
-	if (Kind == EAffineUiMutationKind::CreateElement) M.Name = Value;
+	if (bElement) M.Name = Value;
 	else M.Value = Value;
 	if (!I->Queue(M)) return JS_ThrowInternalError(C, "node creation could not be queued");
 	return JS_NewInt64(C, static_cast<int64>(Id));
@@ -232,6 +279,10 @@ JSValue FAffineUiScriptInstance::QueueCommand(JSContext* C, int32 N, JSValueCons
 		}
 		M.NodeId = static_cast<uint64>(Id);
 	}
+	if (Kind == EAffineUiMutationKind::RegisterClickHandler && N != 1)
+	{
+		return JS_ThrowTypeError(C, "setClickHandler expects one node ID");
+	}
 	if (Kind == EAffineUiMutationKind::Remove && N != 1)
 	{
 		return JS_ThrowTypeError(C, "remove expects one node ID");
@@ -293,6 +344,11 @@ JSValue FAffineUiScriptInstance::SetAttribute(JSContext* C, JSValueConst, int32 
 JSValue FAffineUiScriptInstance::RemoveAttribute(JSContext* C, JSValueConst, int32 N, JSValueConst* A)
 {
 	return QueueCommand(C, N, A, EAffineUiMutationKind::RemoveAttribute);
+}
+
+JSValue FAffineUiScriptInstance::SetClickHandler(JSContext* C, JSValueConst, int32 N, JSValueConst* A)
+{
+	return QueueCommand(C, N, A, EAffineUiMutationKind::RegisterClickHandler);
 }
 
 void FAffineUiScriptInstance::Close()

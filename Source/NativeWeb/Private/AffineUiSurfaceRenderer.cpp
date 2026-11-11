@@ -1,6 +1,8 @@
 #include "AffineUiSurfaceRenderer.h"
 
 #include "Async/Async.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "RenderCommandFence.h"
 #include "RenderingThread.h"
 #include "RHICommandList.h"
@@ -55,6 +57,41 @@ void AffineLog(affineui_log_level Level, const char* Message, void*)
 		UE_LOG(LogAffineUiSurfaceRender, Warning, TEXT("AffineUI: %s"), UTF8_TO_TCHAR(Message ? Message : ""));
 	}
 }
+
+int LoadFontResource(void* User, const char* Url, affineui_resource_blob* Out)
+{
+	if (!User || !Url || !Out) { return 0; }
+	FString Name = UTF8_TO_TCHAR(Url);
+	if (Name.StartsWith(TEXT("/"))) { Name.RightChopInline(1); }
+	if (!Name.StartsWith(TEXT("fonts/"), ESearchCase::CaseSensitive)) { return 0; }
+	Name.RightChopInline(6);
+	const FString Extension = FPaths::GetExtension(Name);
+	if (Name.Contains(TEXT("/")) || Name.Contains(TEXT("\\")) || Name.Contains(TEXT(":")) ||
+		(!Extension.Equals(TEXT("ttf")) && !Extension.Equals(TEXT("otf"))))
+	{
+		return 0;
+	}
+
+	TUniquePtr<TArray<uint8>> Bytes = MakeUnique<TArray<uint8>>();
+	const FString& Directory = *static_cast<const FString*>(User);
+	if (!FFileHelper::LoadFileToArray(*Bytes, *FPaths::Combine(Directory, Name)) || Bytes->IsEmpty()) { return 0; }
+	Out->data = Bytes->GetData();
+	Out->size = static_cast<size_t>(Bytes->Num());
+	Out->release = [](void* Resource) { delete static_cast<TArray<uint8>*>(Resource); };
+	Out->user = Bytes.Release();
+	return 1;
+}
+
+int ToAffineKey(EAffineUiInputKey Key)
+{
+	switch (Key)
+	{
+	case EAffineUiInputKey::Tab: return AFFINEUI_KEY_TAB;
+	case EAffineUiInputKey::Enter: return AFFINEUI_KEY_ENTER;
+	case EAffineUiInputKey::Space: return AFFINEUI_KEY_SPACE;
+	default: return AFFINEUI_KEY_UNKNOWN;
+	}
+}
 }
 
 class FAffineUiSurfaceRenderer::FState
@@ -67,7 +104,7 @@ public:
 
 	bool Render(FRHITexture* Output, FIntPoint Size, float DpiScale, FColor ClearColor, const FAffineUiContent& Content,
 		const TArray<FAffineUiTextMutation>& TextMutations,
-		const TArray<FAffineUiMutation>& Mutations, uint64 InDocumentEpoch)
+		const TArray<FAffineUiMutation>& Mutations, uint64 InDocumentEpoch, const FString& InFontDirectory)
 	{
 		if (!Output || !IsRHID3D11()) { return Fail(TEXT("D3D11 output is unavailable")); }
 		ID3D11DynamicRHI* Rhi = GetID3D11DynamicRHI();
@@ -128,6 +165,7 @@ public:
 			Gpu.color_format = AFFINEUI_FORMAT_BGRA8; Gpu.depth_format = AFFINEUI_FORMAT_DEPTH_STENCIL;
 			Gpu.sample_count = 1;
 			affineui_init_desc Init{}; Init.gpu = &Gpu; Init.log = &AffineLog;
+			RegisteredClickNodes.Reset();
 			affineui_ui_init(Ui, &Init);
 			if (bAffineError)
 			{
@@ -135,6 +173,11 @@ public:
 				bHasContent = false; AppliedText.Reset();
 				DiscardRecordedCommands();
 				return Fail(TEXT("AffineUI initialization failed"));
+			}
+			FontDirectory = InFontDirectory;
+			if (!FontDirectory.IsEmpty())
+			{
+				affineui_ui_set_resource_loader(Ui, &LoadFontResource, &FontDirectory);
 			}
 			UE_LOG(LogAffineUiSurfaceRender, Display, TEXT("AffineUI %s initialized on Unreal D3D11"), UTF8_TO_TCHAR(affineui_version()));
 		}
@@ -176,7 +219,9 @@ public:
 					if (bMutationSuccess) NodeHandles.Add(Mutation.NodeId, Node);
 					break;
 				case EAffineUiMutationKind::CreateElement:
-					Node = affineui_ui_create_node(Ui, AFFINEUI_DOM_ELEMENT, Name.Get());
+				case EAffineUiMutationKind::CreateSvgElement:
+					Node = affineui_ui_create_node(Ui, Mutation.Kind == EAffineUiMutationKind::CreateSvgElement ?
+						AFFINEUI_DOM_SVG_ELEMENT : AFFINEUI_DOM_ELEMENT, Name.Get());
 					bMutationSuccess = IsValidHandle(Node);
 					if (bMutationSuccess) NodeHandles.Add(Mutation.NodeId, Node);
 					break;
@@ -205,6 +250,10 @@ public:
 					break;
 				case EAffineUiMutationKind::RemoveAttribute:
 					bMutationSuccess = affineui_ui_node_remove_attr(Ui, Node, Name.Get()) != 0;
+					break;
+				case EAffineUiMutationKind::RegisterClickHandler:
+					bMutationSuccess = IsValidHandle(Node);
+					if (bMutationSuccess) { RegisterClickHandler(Mutation.NodeId); }
 					break;
 				}
 				if (!bMutationSuccess) break;
@@ -258,10 +307,83 @@ public:
 			return Fail(TEXT("FinishCommandList"), Result);
 		}
 		Immediate->ExecuteCommandList(Commands.GetReference(), true);
+		RenderedSize = Size;
+		RenderedDpiScale = DpiScale;
 		return true;
 	}
 
+	bool DispatchInput(const FAffineUiInput& Input, FIntPoint TextureSize, uint64 InDocumentEpoch, TArray<uint64>& OutClicks)
+	{
+		if (!Ui || DocumentEpoch != InDocumentEpoch) { return false; }
+
+		affineui_event Event{};
+		Event.button = AFFINEUI_MOUSE_LEFT;
+		Event.shift = Input.bShift;
+		const bool bPointer = Input.Kind == EAffineUiInputKind::MouseMove ||
+			Input.Kind == EAffineUiInputKind::MouseDown || Input.Kind == EAffineUiInputKind::MouseUp ||
+			Input.Kind == EAffineUiInputKind::MouseWheel;
+		if (bPointer)
+		{
+			// A captured release must still clear AffineUI's pressed state if a
+			// resize changed the output between press and release. Coordinates
+			// are normalized by Slate, so map them to the renderer's current size.
+			if (TextureSize != RenderedSize && Input.Kind != EAffineUiInputKind::MouseUp) { return false; }
+			Event.x = FMath::FloorToInt(Input.Position.X * RenderedSize.X / RenderedDpiScale);
+			Event.y = FMath::FloorToInt(Input.Position.Y * RenderedSize.Y / RenderedDpiScale);
+		}
+		switch (Input.Kind)
+		{
+		case EAffineUiInputKind::MouseMove: Event.type = AFFINEUI_EVENT_MOUSE_MOVE; break;
+		case EAffineUiInputKind::MouseDown: Event.type = AFFINEUI_EVENT_MOUSE_DOWN; break;
+		case EAffineUiInputKind::MouseUp: Event.type = AFFINEUI_EVENT_MOUSE_UP; break;
+		case EAffineUiInputKind::MouseWheel:
+			Event.type = AFFINEUI_EVENT_MOUSE_WHEEL;
+			Event.wheel_dy = Input.WheelDelta;
+			break;
+		case EAffineUiInputKind::KeyDown:
+		case EAffineUiInputKind::KeyUp:
+			Event.type = Input.Kind == EAffineUiInputKind::KeyDown ? AFFINEUI_EVENT_KEY_DOWN : AFFINEUI_EVENT_KEY_UP;
+			Event.key = ToAffineKey(Input.Key);
+			break;
+		case EAffineUiInputKind::FocusGained: Event.type = AFFINEUI_EVENT_FOCUS_GAINED; break;
+		case EAffineUiInputKind::FocusLost: Event.type = AFFINEUI_EVENT_FOCUS_LOST; break;
+		}
+		// Some control handlers use the most recently hit hover chain on release.
+		if (Input.Kind == EAffineUiInputKind::MouseUp)
+		{
+			affineui_event Move = Event;
+			Move.type = AFFINEUI_EVENT_MOUSE_MOVE;
+			affineui_ui_dispatch(Ui, &Move);
+		}
+		affineui_ui_dispatch(Ui, &Event);
+		OutClicks = MoveTemp(ClickedNodes);
+		return affineui_ui_needs_update(Ui) != 0;
+	}
+
 private:
+	void RegisterClickHandler(uint64 NodeId)
+	{
+		if (RegisteredClickNodes.Contains(NodeId)) { return; }
+		RegisteredClickNodes.Add(NodeId);
+		struct FClickBinding
+		{
+			FState* State;
+			uint64 Epoch;
+			uint64 NodeId;
+		};
+		FClickBinding* Binding = new FClickBinding{this, DocumentEpoch, NodeId};
+		const FString Selector = FString::Printf(TEXT(".nativeweb-click-%llu"), static_cast<unsigned long long>(NodeId));
+		const FTCHARToUTF8 SelectorUtf8(*Selector);
+		affineui_ui_on_click(Ui, SelectorUtf8.Get(), [](void* User)
+		{
+			const FClickBinding& Click = *static_cast<FClickBinding*>(User);
+			if (Click.Epoch == Click.State->DocumentEpoch && IsValidHandle(Click.State->Resolve(Click.NodeId)))
+			{
+				Click.State->ClickedNodes.Add(Click.NodeId);
+			}
+		}, Binding, [](void* User) { delete static_cast<FClickBinding*>(User); });
+	}
+
 	affineui_dom_handle Resolve(uint64 Id) const
 	{
 		if (Id == 0) return {};
@@ -298,6 +420,11 @@ private:
 	FString LastCss;
 	TMap<FString, FString> AppliedText;
 	TMap<uint64, affineui_dom_handle> NodeHandles;
+	TSet<uint64> RegisteredClickNodes;
+	TArray<uint64> ClickedNodes;
+	FString FontDirectory;
+	FIntPoint RenderedSize = FIntPoint::ZeroValue;
+	float RenderedDpiScale = 1.0f;
 	uint64 DocumentEpoch = 0;
 	bool bHasContent = false;
 };
@@ -306,22 +433,22 @@ class FAffineUiSurfaceRenderer::FState {};
 #endif
 
 void FAffineUiSurfaceRenderer::Draw(FTextureRenderTargetResource* Target, FIntPoint Size, float DpiScale, FColor ClearColor,
-	FAffineUiContent Content, uint64 Revision, TArray<FAffineUiTextMutation> TextMutations,
+	FAffineUiContent Content, FString FontDirectory, uint64 Revision, TArray<FAffineUiTextMutation> TextMutations,
 	TArray<FAffineUiMutation> Mutations, uint64 DocumentEpoch,
 	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface)
 {
-	ENQUEUE_RENDER_COMMAND(AffineSurfaceDraw)([this, Target, Size, DpiScale, ClearColor, Content = MoveTemp(Content),
+	ENQUEUE_RENDER_COMMAND(AffineSurfaceDraw)([this, Target, Size, DpiScale, ClearColor, Content = MoveTemp(Content), FontDirectory = MoveTemp(FontDirectory),
 		TextMutations = MoveTemp(TextMutations), Mutations = MoveTemp(Mutations), DocumentEpoch, Revision, Surface](FRHICommandListImmediate& RHICmdList) mutable
 	{
 		FTextureRHIRef Output;
 		if (Target) { Output = Target->GetRenderTargetTexture(); }
-		RHICmdList.EnqueueLambda([this, Output, Size, DpiScale, ClearColor, Content = MoveTemp(Content),
+		RHICmdList.EnqueueLambda([this, Output, Size, DpiScale, ClearColor, Content = MoveTemp(Content), FontDirectory = MoveTemp(FontDirectory),
 			TextMutations = MoveTemp(TextMutations), Mutations = MoveTemp(Mutations), DocumentEpoch, Revision, Surface](FRHICommandListBase&)
 		{
 			bool bSuccess = false;
 #if PLATFORM_WINDOWS
 			if (!State) { State = new FState(); }
-			bSuccess = State->Render(Output.GetReference(), Size, DpiScale, ClearColor, Content, TextMutations, Mutations, DocumentEpoch);
+			bSuccess = State->Render(Output.GetReference(), Size, DpiScale, ClearColor, Content, TextMutations, Mutations, DocumentEpoch, FontDirectory);
 #endif
 			AsyncTask(ENamedThreads::GameThread, [Surface, Revision, bSuccess]()
 			{
@@ -332,6 +459,29 @@ void FAffineUiSurfaceRenderer::Draw(FTextureRenderTargetResource* Target, FIntPo
 			});
 		});
 	});
+}
+
+void FAffineUiSurfaceRenderer::DispatchInput(FAffineUiInput Input, FIntPoint TextureSize, uint64 DocumentEpoch,
+	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface)
+{
+#if PLATFORM_WINDOWS
+	ENQUEUE_RENDER_COMMAND(AffineSurfaceInput)([this, Input, TextureSize, DocumentEpoch, Surface](FRHICommandListImmediate& RHICmdList)
+	{
+		RHICmdList.EnqueueLambda([this, Input, TextureSize, DocumentEpoch, Surface](FRHICommandListBase&)
+		{
+			TArray<uint64> Clicks;
+			const bool bNeedsRedraw = State && State->DispatchInput(Input, TextureSize, DocumentEpoch, Clicks);
+			if (Clicks.IsEmpty() && !bNeedsRedraw) { return; }
+			AsyncTask(ENamedThreads::GameThread, [Surface, DocumentEpoch, Clicks = MoveTemp(Clicks), bNeedsRedraw]() mutable
+			{
+				if (TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Pinned = Surface.Pin())
+				{
+					Pinned->OnInputComplete(DocumentEpoch, MoveTemp(Clicks), bNeedsRedraw);
+				}
+			});
+		});
+	});
+#endif
 }
 
 void FAffineUiSurfaceRenderer::Shutdown()

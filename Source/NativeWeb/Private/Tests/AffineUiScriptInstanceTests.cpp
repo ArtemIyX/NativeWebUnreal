@@ -2,7 +2,9 @@
 
 #include "AffineUiScriptInstance.h"
 #include "DynamicRHI.h"
+#include "Misc/FileHelper.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/Paths.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAffineUiScriptInstanceBridgeTest,
 	"NativeWeb.AffineUi.QuickJS.BridgeLifecycleAndTextUpdates",
@@ -45,6 +47,57 @@ bool FAffineUiScriptInstanceBridgeTest::RunTest(const FString& Parameters)
 	Instance = FAffineUiScriptInstance::Create(Desc, Error);
 	TestTrue(TEXT("A new bridge instance can be created after teardown"), Instance.IsValid());
 	if (Instance) { Instance->Close(); }
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAffineUiVueBundleTest,
+	"NativeWeb.AffineUi.QuickJS.VueAppBundle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAffineUiVueBundleTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	if (!GDynamicRHI || GDynamicRHI->GetInterfaceType() != ERHIInterfaceType::D3D11)
+	{
+		AddWarning(TEXT("This test requires an isolated D3D11 editor session (-dx11)."));
+		return true;
+	}
+	const FString AssetDirectory = FPaths::Combine(FPaths::ProjectContentDir(), TEXT("NativeWeb/Vue"));
+	const FString ScriptPath = FPaths::Combine(AssetDirectory, TEXT("ui.js"));
+	const FString CssPath = FPaths::Combine(AssetDirectory, TEXT("ui.css"));
+	FString ScriptSource;
+	FString CssSource;
+	TestTrue(TEXT("The Vue JS bundle is staged as project content"), FFileHelper::LoadFileToString(ScriptSource, *ScriptPath));
+	TestTrue(TEXT("The Vue stylesheet is staged as project content"), FFileHelper::LoadFileToString(CssSource, *CssPath));
+	if (ScriptSource.IsEmpty() || CssSource.IsEmpty()) return false;
+	TestTrue(TEXT("The staged stylesheet includes the shared app card"), CssSource.Contains(TEXT(".counter-card"), ESearchCase::CaseSensitive));
+	FAffineUiSurfaceDesc Desc;
+	Desc.Content.Html = TEXT("<html><body><div id=\"app\"></div></body></html>");
+	Desc.Content.Css = CssSource;
+	FString Error;
+	TUniquePtr<FAffineUiScriptInstance> Instance = FAffineUiScriptInstance::Create(Desc, Error);
+	if (!TestTrue(TEXT("Vue bundle surface and QuickJS instance are created"), Instance.IsValid()))
+	{
+		AddError(Error);
+		return false;
+	}
+	const uint64 InitialDocumentEpoch = Instance->GetSurface()->GetDocumentEpoch();
+	FQuickJSError JsError;
+	if (!TestTrue(TEXT("The shared Vue app bundle evaluates in QuickJS"), Instance->Evaluate(ScriptSource, JsError, ScriptPath)))
+	{
+		AddError(JsError.Message);
+		return false;
+	}
+	TestTrue(TEXT("The Vue app exposes the NativeWeb click entry point"), Instance->Evaluate(
+		TEXT("if (typeof globalThis.__nativeWebClick !== 'function') throw new Error('NativeWeb click entry point is missing')"), JsError));
+	if (!JsError.Message.IsEmpty()) AddError(JsError.Message);
+	int32 JobsExecuted = 0;
+	bool bPending = false;
+	TestTrue(TEXT("Vue Promise and scheduler jobs pump successfully"), Instance->PumpJobs(256, JobsExecuted, bPending, JsError));
+	if (!JsError.Message.IsEmpty()) AddError(JsError.Message);
+	TestFalse(TEXT("The Vue app leaves no pending jobs after mounting"), bPending);
+	TestEqual(TEXT("Vue mutations preserve the loaded document"), Instance->GetSurface()->GetDocumentEpoch(), InitialDocumentEpoch);
+	Instance->Close();
 	return true;
 }
 

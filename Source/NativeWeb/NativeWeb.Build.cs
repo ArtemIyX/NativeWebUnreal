@@ -10,7 +10,7 @@ public class NativeWeb : ModuleRules
         {
             PublicDependencyModuleNames.Add("QuickJSUnreal");
         }
-        PrivateDependencyModuleNames.AddRange(new string[] { "AffineUnreal", "RHI", "RenderCore", "Slate", "SlateCore" });
+        PrivateDependencyModuleNames.AddRange(new string[] { "AffineUnreal", "InputCore", "RHI", "RenderCore", "Slate", "SlateCore" });
         if (Target.Platform == UnrealTargetPlatform.Win64)
         {
             PrivateDependencyModuleNames.Add("D3D11RHI");

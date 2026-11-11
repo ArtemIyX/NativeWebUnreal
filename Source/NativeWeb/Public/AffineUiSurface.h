@@ -23,8 +23,8 @@ struct NATIVEWEB_API FAffineUiTextMutation
 
 enum class EAffineUiMutationKind : uint8
 {
-	MountRoot, CreateElement, CreateText, CreateComment, InsertBefore, Remove,
-	SetText, SetAttribute, RemoveAttribute
+	MountRoot, CreateElement, CreateSvgElement, CreateText, CreateComment, InsertBefore, Remove,
+	SetText, SetAttribute, RemoveAttribute, RegisterClickHandler
 };
 
 /** Copied game-thread command; strings and logical IDs cross to the RHI lane. */
@@ -39,16 +39,35 @@ struct NATIVEWEB_API FAffineUiMutation
 	FString Value;
 };
 
+enum class EAffineUiInputKind : uint8
+{
+	MouseMove, MouseDown, MouseUp, MouseWheel, KeyDown, KeyUp, FocusGained, FocusLost
+};
+
+enum class EAffineUiInputKey : uint8 { None, Tab, Enter, Space };
+
+/** Input relative to the published texture, independent of Slate and CSS scale. */
+struct FAffineUiInput
+{
+	EAffineUiInputKind Kind;
+	FVector2D Position = FVector2D::ZeroVector;
+	EAffineUiInputKey Key = EAffineUiInputKey::None;
+	float WheelDelta = 0.0f;
+	bool bShift = false;
+};
+
 struct NATIVEWEB_API FAffineUiSurfaceDesc
 {
 	FIntPoint PixelSize = FIntPoint(480, 240);
 	float DpiScale = 1.0f;
 	FColor ClearColor = FColor(0, 0, 0, 255);
 	FAffineUiContent Content;
+	FString FontDirectory;
 };
 
 DECLARE_DELEGATE_OneParam(FAffineUiTextureReady, UTextureRenderTarget2D*);
 DECLARE_DELEGATE_OneParam(FAffineUiSurfaceError, const FString&);
+DECLARE_DELEGATE_OneParam(FAffineUiClick, uint64);
 
 /** One D3D11 surface. All public methods, including destruction, run on the game thread. */
 class NATIVEWEB_API FAffineUiSurface : public TSharedFromThis<FAffineUiSurface, ESPMode::ThreadSafe>
@@ -69,6 +88,8 @@ public:
 	bool SetTextById(const FString& ElementId, const FString& Text);
 	bool QueueMutation(const FAffineUiMutation& Mutation);
 	uint64 GetDocumentEpoch() const;
+	bool QueueInput(const FAffineUiInput& Input);
+	void SetOnClick(FAffineUiClick Callback);
 
 	/** The callback runs on the game thread after each successful texture publication. */
 	void SetOnTextureReady(FAffineUiTextureReady Callback);
@@ -82,7 +103,9 @@ private:
 	friend class FAffineUiSurfaceRenderer;
 	FAffineUiSurface();
 	void StartPending();
+	void RequestInputRedraw();
 	void OnRenderComplete(uint64 Revision, bool bSuccess);
+	void OnInputComplete(uint64 DocumentEpoch, TArray<uint64> Clicks, bool bNeedsRedraw);
 	class FImpl;
 	TUniquePtr<FImpl> Impl;
 };

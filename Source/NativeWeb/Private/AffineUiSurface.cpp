@@ -67,6 +67,7 @@ public:
 	FAffineUiSurfaceDesc Desired;
 	FAffineUiTextureReady OnTextureReady;
 	FAffineUiSurfaceError OnError;
+	FAffineUiClick OnClick;
 	FAffineUiSurfaceRenderer Renderer;
 	TStrongObjectPtr<UTextureRenderTarget2D> Output;
 	TStrongObjectPtr<UTextureRenderTarget2D> Pending;
@@ -75,6 +76,8 @@ public:
 	FString LastError;
 	uint64 DesiredRevision = 1;
 	uint64 PendingRevision = 0;
+	uint64 PendingDocumentEpoch = 0;
+	uint64 OutputDocumentEpoch = 0;
 	TMap<FString, FString> LiveTextUpdates;
 	TArray<FAffineUiMutation> PendingMutations;
 	uint64 DocumentEpoch = 1;
@@ -210,6 +213,53 @@ uint64 FAffineUiSurface::GetDocumentEpoch() const
 	return Impl->DocumentEpoch;
 }
 
+bool FAffineUiSurface::QueueInput(const FAffineUiInput& Input)
+{
+	check(IsInGameThread());
+	if (Impl->bClosed || !Impl->Output.IsValid() || Impl->OutputDocumentEpoch != Impl->DocumentEpoch)
+	{
+		return false;
+	}
+	const FIntPoint Size(Impl->Output->SizeX, Impl->Output->SizeY);
+	Impl->Renderer.DispatchInput(Input, Size, Impl->DocumentEpoch, AsShared());
+	return true;
+}
+
+void FAffineUiSurface::SetOnClick(FAffineUiClick Callback)
+{
+	check(IsInGameThread());
+	if (!Impl->bClosed) { Impl->OnClick = MoveTemp(Callback); }
+}
+
+void FAffineUiSurface::OnInputComplete(uint64 DocumentEpoch, TArray<uint64> Clicks, bool bNeedsRedraw)
+{
+	check(IsInGameThread());
+	if (Impl->bClosed || DocumentEpoch != Impl->DocumentEpoch) { return; }
+	for (uint64 NodeId : Clicks)
+	{
+		FAffineUiClick Callback = Impl->OnClick;
+		Callback.ExecuteIfBound(NodeId);
+		if (Impl->bClosed || DocumentEpoch != Impl->DocumentEpoch) { return; }
+	}
+	if (bNeedsRedraw) { RequestInputRedraw(); }
+}
+
+void FAffineUiSurface::RequestInputRedraw()
+{
+	check(IsInGameThread());
+	if (Impl->bClosed) { return; }
+
+	// Input can arrive faster than the renderer can publish frames. Keep the
+	// in-flight revision publishable, then schedule one redraw for the latest
+	// AffineUI state instead of invalidating it for every pointer move.
+	if (!Impl->bDirty)
+	{
+		Impl->bDirty = true;
+		if (!Impl->bInFlight) { ++Impl->DesiredRevision; }
+	}
+	StartPending();
+}
+
 void FAffineUiSurface::SetOnTextureReady(FAffineUiTextureReady Callback)
 {
 	check(IsInGameThread());
@@ -275,6 +325,7 @@ void FAffineUiSurface::StartPending()
 	Target->InitCustomFormat(Impl->Desired.PixelSize.X, Impl->Desired.PixelSize.Y, PF_B8G8R8A8, false);
 	Target->UpdateResourceImmediate(true);
 	Impl->PendingRevision = Impl->DesiredRevision;
+	Impl->PendingDocumentEpoch = Impl->DocumentEpoch;
 	Impl->bInFlight = true;
 	Impl->bDirty = false;
 	TArray<FAffineUiTextMutation> TextMutations;
@@ -288,7 +339,7 @@ void FAffineUiSurface::StartPending()
 	TArray<FAffineUiMutation> Mutations = MoveTemp(Impl->PendingMutations);
 	Impl->PendingMutations.Reset();
 	Impl->Renderer.Draw(Target->GameThread_GetRenderTargetResource(), Impl->Desired.PixelSize,
-		Impl->Desired.DpiScale, Impl->Desired.ClearColor, Impl->Desired.Content, Impl->PendingRevision,
+		Impl->Desired.DpiScale, Impl->Desired.ClearColor, Impl->Desired.Content, Impl->Desired.FontDirectory, Impl->PendingRevision,
 		MoveTemp(TextMutations), MoveTemp(Mutations), Impl->DocumentEpoch, AsShared());
 }
 
@@ -324,6 +375,7 @@ void FAffineUiSurface::OnRenderComplete(uint64 Revision, bool bSuccess)
 			}
 		}
 		Impl->Output.Reset(Impl->Pending.Get());
+		Impl->OutputDocumentEpoch = Impl->PendingDocumentEpoch;
 		Impl->Pending.Reset();
 		Impl->LastError.Reset();
 		// Hold the surface through callbacks that can close it or drop their last reference.
@@ -352,6 +404,7 @@ void FAffineUiSurface::Close()
 	Impl->bClosed = true;
 	Impl->OnTextureReady.Unbind();
 	Impl->OnError.Unbind();
+	Impl->OnClick.Unbind();
 	if (Impl->RetirementTicker.IsValid())
 	{
 		FTSTicker::RemoveTicker(Impl->RetirementTicker);

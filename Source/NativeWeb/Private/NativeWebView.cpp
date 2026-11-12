@@ -7,6 +7,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "NativeWeb.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "Subsystems/NativeWebLocalPlayerSubsystem.h"
 #include "Widgets/NativeWebViewSlate.h"
 

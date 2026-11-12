@@ -6,28 +6,27 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "Misc/FileHelper.h"
 #include "HAL/FileManager.h"
+#include "NativeWeb.h"
 #include "RenderCommandFence.h"
 #include "RenderingThread.h"
 #include "RHICommandList.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UObjectGlobals.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogAffineUiSurface, Log, All);
-
 namespace
 {
-TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> ActiveSurface;
+	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> ActiveSurface;
 
-bool IsValidDescriptor(FIntPoint Size, float DpiScale)
-{
-	return Size.X > 0 && Size.Y > 0 && Size.X <= 4096 && Size.Y <= 4096 &&
-		FMath::IsFinite(DpiScale) && DpiScale > 0.0f && DpiScale <= 8.0f;
-}
+	bool IsValidDescriptor(FIntPoint Size, float DpiScale)
+	{
+		return Size.X > 0 && Size.Y > 0 && Size.X <= 4096 && Size.Y <= 4096 &&
+			FMath::IsFinite(DpiScale) && DpiScale > 0.0f && DpiScale <= 8.0f;
+	}
 
-bool ContainsEmbeddedNull(const FString& Text)
-{
-	return FCString::Strlen(*Text) != Text.Len();
-}
+	bool ContainsEmbeddedNull(const FString& Text)
+	{
+		return FCString::Strlen(*Text) != Text.Len();
+	}
 }
 
 class FAffineUiSurface::FImpl
@@ -48,10 +47,12 @@ public:
 			}
 			else
 			{
-				UE_LOG(LogAffineUiSurface, Warning, TEXT("Could not allocate a GPU retirement fence; keeping the old texture until Close."));
+				UE_LOG(LogNativeWebRender, Warning,
+				       TEXT("Could not allocate a GPU retirement fence; keeping the old texture until Close."));
 			}
 			Fence.BeginFence(FRenderCommandFence::ESyncDepth::RHIThread);
 		}
+
 		TStrongObjectPtr<UTextureRenderTarget2D> Texture;
 		FGPUFenceRHIRef GpuFence;
 		FRenderCommandFence Fence;
@@ -88,30 +89,39 @@ public:
 	bool bClosed = false;
 };
 
-FAffineUiSurface::FAffineUiSurface() : Impl(MakeUnique<FImpl>()) {}
+FAffineUiSurface::FAffineUiSurface() : Impl(MakeUnique<FImpl>())
+{
+}
 
-TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> FAffineUiSurface::Create(const FAffineUiSurfaceDesc& Desc, FString& OutError)
+TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> FAffineUiSurface::Create(
+	const FAffineUiSurfaceDesc& Desc, FString& OutError)
 {
 	check(IsInGameThread());
 	OutError.Reset();
+	UE_LOG(LogNativeWebAffineUi, Log, TEXT("Requesting surface %dx%d at DPI %.2f."),
+	       Desc.PixelSize.X, Desc.PixelSize.Y, Desc.DpiScale);
 #if !PLATFORM_WINDOWS
 	OutError = TEXT("AffineUI surfaces require Win64 D3D11.");
+	UE_LOG(LogNativeWebAffineUi, Error, TEXT("Surface creation rejected: %s"), *OutError);
 	return nullptr;
 #else
 	if (!GDynamicRHI || GDynamicRHI->GetInterfaceType() != ERHIInterfaceType::D3D11)
 	{
 		OutError = TEXT("AffineUI surfaces require D3D11; launch with -dx11.");
+		UE_LOG(LogNativeWebAffineUi, Error, TEXT("Surface creation rejected: %s"), *OutError);
 		return nullptr;
 	}
 	if (ActiveSurface.IsValid())
 	{
 		OutError = TEXT("Only one AffineUI surface can be active in this process.");
+		UE_LOG(LogNativeWebAffineUi, Error, TEXT("Surface capacity rejected creation: %s"), *OutError);
 		return nullptr;
 	}
 	if (!IsValidDescriptor(Desc.PixelSize, Desc.DpiScale) || Desc.ClearColor.A != 255 ||
 		ContainsEmbeddedNull(Desc.Content.Html) || ContainsEmbeddedNull(Desc.Content.Css))
 	{
 		OutError = TEXT("Invalid surface size, DPI scale, clear color alpha, or embedded null in content.");
+		UE_LOG(LogNativeWebAffineUi, Error, TEXT("Surface creation rejected: %s"), *OutError);
 		return nullptr;
 	}
 	TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface = MakeShareable(new FAffineUiSurface());
@@ -128,11 +138,21 @@ TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> FAffineUiSurface::Create(const
 		{
 			TArray<uint8> Bytes;
 			if (FFileHelper::LoadFileToArray(Bytes, *FPaths::Combine(Desc.FontDirectory, File)) && !Bytes.IsEmpty())
+			{
 				PreloadedFonts.Add(FString(TEXT("fonts/")) + File, MoveTemp(Bytes));
+				UE_LOG(LogNativeWebAssets, VeryVerbose, TEXT("Preloaded font asset '%s'."), *File);
+			}
+			else
+			{
+				UE_LOG(LogNativeWebAssets, Warning, TEXT("Could not preload font asset '%s'."), *File);
+			}
 		}
 	}
-	Surface->Impl->FontAssets = MakeShared<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe>(MoveTemp(PreloadedFonts));
+	Surface->Impl->FontAssets = MakeShared<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe>(
+		MoveTemp(PreloadedFonts));
 	ActiveSurface = Surface;
+	UE_LOG(LogNativeWebAffineUi, Display, TEXT("AffineUI surface created; preloaded %d font asset(s)."),
+	       Surface->Impl->FontAssets->Num());
 	Surface->StartPending();
 	return Surface;
 #endif
@@ -147,7 +167,12 @@ FAffineUiSurface::~FAffineUiSurface()
 bool FAffineUiSurface::SetContent(const FAffineUiContent& Content)
 {
 	check(IsInGameThread());
-	if (Impl->bClosed || ContainsEmbeddedNull(Content.Html) || ContainsEmbeddedNull(Content.Css)) { return false; }
+	if (Impl->bClosed || ContainsEmbeddedNull(Content.Html) || ContainsEmbeddedNull(Content.Css))
+	{
+		UE_LOG(LogNativeWebAffineUi, Warning, TEXT("Rejected content update (closed=%s html chars=%d css chars=%d)."),
+		       Impl->bClosed ? TEXT("true") : TEXT("false"), Content.Html.Len(), Content.Css.Len());
+		return false;
+	}
 	if (Impl->Desired.Content.Html != Content.Html)
 	{
 		++Impl->DocumentEpoch;
@@ -157,6 +182,10 @@ bool FAffineUiSurface::SetContent(const FAffineUiContent& Content)
 	Impl->Desired.Content = Content;
 	++Impl->DesiredRevision;
 	Impl->bDirty = true;
+	UE_LOG(LogNativeWebAffineUi, Verbose,
+	       TEXT("Content update queued (revision=%llu epoch=%llu html chars=%d css chars=%d)."),
+	       static_cast<unsigned long long>(Impl->DesiredRevision),
+	       static_cast<unsigned long long>(Impl->DocumentEpoch), Content.Html.Len(), Content.Css.Len());
 	StartPending();
 	return true;
 }
@@ -165,16 +194,23 @@ bool FAffineUiSurface::LoadContentFromFiles(const FString& HtmlPath, const FStri
 {
 	check(IsInGameThread());
 	OutError.Reset();
-	if (Impl->bClosed) { OutError = TEXT("Surface is closed."); return false; }
+	if (Impl->bClosed)
+	{
+		OutError = TEXT("Surface is closed.");
+		UE_LOG(LogNativeWebAssets, Warning, TEXT("File load rejected for a closed surface."));
+		return false;
+	}
 	FAffineUiContent NewContent;
 	if (!FFileHelper::LoadFileToString(NewContent.Html, *HtmlPath))
 	{
 		OutError = FString::Printf(TEXT("Could not read HTML file: %s"), *HtmlPath);
+		UE_LOG(LogNativeWebAssets, Error, TEXT("%s"), *OutError);
 		return false;
 	}
 	if (!FFileHelper::LoadFileToString(NewContent.Css, *CssPath))
 	{
 		OutError = FString::Printf(TEXT("Could not read CSS file: %s"), *CssPath);
+		UE_LOG(LogNativeWebAssets, Error, TEXT("%s"), *OutError);
 		return false;
 	}
 	if (!SetContent(NewContent))
@@ -188,12 +224,19 @@ bool FAffineUiSurface::LoadContentFromFiles(const FString& HtmlPath, const FStri
 bool FAffineUiSurface::Resize(FIntPoint PixelSize, float DpiScale)
 {
 	check(IsInGameThread());
-	if (Impl->bClosed || !IsValidDescriptor(PixelSize, DpiScale)) { return false; }
+	if (Impl->bClosed || !IsValidDescriptor(PixelSize, DpiScale))
+	{
+		UE_LOG(LogNativeWebAffineUi, Warning, TEXT("Rejected surface resize to %dx%d at DPI %.2f (closed=%s)."),
+		       PixelSize.X, PixelSize.Y, DpiScale, Impl->bClosed ? TEXT("true") : TEXT("false"));
+		return false;
+	}
 	if (Impl->Desired.PixelSize == PixelSize && Impl->Desired.DpiScale == DpiScale) { return true; }
 	Impl->Desired.PixelSize = PixelSize;
 	Impl->Desired.DpiScale = DpiScale;
 	++Impl->DesiredRevision;
 	Impl->bDirty = true;
+	UE_LOG(LogNativeWebAffineUi, Verbose, TEXT("Surface resize queued to %dx%d at DPI %.2f (revision=%llu)."),
+	       PixelSize.X, PixelSize.Y, DpiScale, static_cast<unsigned long long>(Impl->DesiredRevision));
 	StartPending();
 	return true;
 }
@@ -211,8 +254,15 @@ bool FAffineUiSurface::RequestRedraw()
 bool FAffineUiSurface::SetTextById(const FString& ElementId, const FString& Text)
 {
 	check(IsInGameThread());
-	if (Impl->bClosed || ElementId.IsEmpty() || ContainsEmbeddedNull(ElementId) || ContainsEmbeddedNull(Text)) { return false; }
+	if (Impl->bClosed || ElementId.IsEmpty() || ContainsEmbeddedNull(ElementId) || ContainsEmbeddedNull(Text))
+	{
+		UE_LOG(LogNativeWebAffineUi, VeryVerbose, TEXT("Rejected text update (closed=%s, element id chars=%d)."),
+		       Impl->bClosed ? TEXT("true") : TEXT("false"), ElementId.Len());
+		return false;
+	}
 	Impl->LiveTextUpdates.Add(ElementId, Text);
+	UE_LOG(LogNativeWebAffineUi, VeryVerbose, TEXT("Queued text update for element '%s' (%d chars)."),
+	       *ElementId, Text.Len());
 	return RequestRedraw();
 }
 
@@ -220,8 +270,18 @@ bool FAffineUiSurface::QueueMutation(const FAffineUiMutation& Mutation)
 {
 	check(IsInGameThread());
 	if (Impl->bClosed || Mutation.DocumentEpoch != Impl->DocumentEpoch ||
-		ContainsEmbeddedNull(Mutation.Name) || ContainsEmbeddedNull(Mutation.Value)) { return false; }
+		ContainsEmbeddedNull(Mutation.Name) || ContainsEmbeddedNull(Mutation.Value))
+	{
+		UE_LOG(LogNativeWebAffineUi, VeryVerbose,
+		       TEXT("Rejected mutation kind=%d (closed=%s epoch=%llu current=%llu)."),
+		       static_cast<int32>(Mutation.Kind), Impl->bClosed ? TEXT("true") : TEXT("false"),
+		       static_cast<unsigned long long>(Mutation.DocumentEpoch),
+		       static_cast<unsigned long long>(Impl->DocumentEpoch));
+		return false;
+	}
 	Impl->PendingMutations.Add(Mutation);
+	UE_LOG(LogNativeWebAffineUi, VeryVerbose, TEXT("Queued DOM mutation kind=%d node=%llu."),
+	       static_cast<int32>(Mutation.Kind), static_cast<unsigned long long>(Mutation.NodeId));
 	return RequestRedraw();
 }
 
@@ -236,8 +296,16 @@ bool FAffineUiSurface::QueueInput(const FAffineUiInput& Input)
 	check(IsInGameThread());
 	if (Impl->bClosed || !Impl->Output.IsValid() || Impl->OutputDocumentEpoch != Impl->DocumentEpoch)
 	{
+		UE_LOG(LogNativeWebInput, VeryVerbose,
+		       TEXT("Dropped surface input kind=%d (closed=%s output=%s outputEpoch=%llu currentEpoch=%llu)."),
+		       static_cast<int32>(Input.Kind), Impl->bClosed ? TEXT("true") : TEXT("false"),
+		       Impl->Output.IsValid() ? TEXT("true") : TEXT("false"),
+		       static_cast<unsigned long long>(Impl->OutputDocumentEpoch),
+		       static_cast<unsigned long long>(Impl->DocumentEpoch));
 		return false;
 	}
+	UE_LOG(LogNativeWebInput, VeryVerbose, TEXT("Dispatching surface input kind=%d at (%.3f, %.3f)."),
+	       static_cast<int32>(Input.Kind), Input.Position.X, Input.Position.Y);
 	const FIntPoint Size(Impl->Output->SizeX, Impl->Output->SizeY);
 	Impl->Renderer.DispatchInput(Input, Size, Impl->DocumentEpoch, AsShared());
 	return true;
@@ -252,9 +320,17 @@ void FAffineUiSurface::SetOnClick(FAffineUiClick Callback)
 void FAffineUiSurface::OnInputComplete(uint64 DocumentEpoch, TArray<uint64> Clicks, bool bNeedsRedraw)
 {
 	check(IsInGameThread());
-	if (Impl->bClosed || DocumentEpoch != Impl->DocumentEpoch) { return; }
+	if (Impl->bClosed || DocumentEpoch != Impl->DocumentEpoch)
+	{
+		UE_LOG(LogNativeWebInput, VeryVerbose, TEXT("Ignored stale input completion (callback epoch=%llu current=%llu)."),
+		       static_cast<unsigned long long>(DocumentEpoch),
+		       static_cast<unsigned long long>(Impl->DocumentEpoch));
+		return;
+	}
 	for (uint64 NodeId : Clicks)
 	{
+		UE_LOG(LogNativeWebInput, VeryVerbose, TEXT("Surface click callback for node %llu."),
+		       static_cast<unsigned long long>(NodeId));
 		FAffineUiClick Callback = Impl->OnClick;
 		Callback.ExecuteIfBound(NodeId);
 		if (Impl->bClosed || DocumentEpoch != Impl->DocumentEpoch) { return; }
@@ -323,11 +399,17 @@ void FAffineUiSurface::StartPending()
 {
 	check(IsInGameThread());
 	if (Impl->bClosed || Impl->bInFlight || !Impl->bDirty) { return; }
+	UE_LOG(LogNativeWebRender, VeryVerbose,
+	       TEXT("Submitting surface render revision=%llu epoch=%llu size=%dx%d dpi=%.2f."),
+	       static_cast<unsigned long long>(Impl->DesiredRevision),
+	       static_cast<unsigned long long>(Impl->DocumentEpoch), Impl->Desired.PixelSize.X,
+	       Impl->Desired.PixelSize.Y, Impl->Desired.DpiScale);
 	Impl->CollectRetired();
 	UTextureRenderTarget2D* Target = NewObject<UTextureRenderTarget2D>(GetTransientPackage());
 	if (!Target)
 	{
 		Impl->LastError = TEXT("Could not allocate the output render target.");
+		UE_LOG(LogNativeWebRender, Error, TEXT("%s"), *Impl->LastError);
 		Impl->bDirty = false;
 		TSharedRef<FAffineUiSurface, ESPMode::ThreadSafe> KeepAlive = AsShared();
 		(void)KeepAlive;
@@ -357,14 +439,23 @@ void FAffineUiSurface::StartPending()
 	TArray<FAffineUiMutation> Mutations = MoveTemp(Impl->PendingMutations);
 	Impl->PendingMutations.Reset();
 	Impl->Renderer.Draw(Target->GameThread_GetRenderTargetResource(), Impl->Desired.PixelSize,
-		Impl->Desired.DpiScale, Impl->Desired.ClearColor, Impl->Desired.Content, Impl->FontAssets.ToSharedRef(), Impl->PendingRevision,
-		MoveTemp(TextMutations), MoveTemp(Mutations), Impl->DocumentEpoch, AsShared());
+	                    Impl->Desired.DpiScale, Impl->Desired.ClearColor, Impl->Desired.Content,
+	                    Impl->FontAssets.ToSharedRef(), Impl->PendingRevision,
+	                    MoveTemp(TextMutations), MoveTemp(Mutations), Impl->DocumentEpoch, AsShared());
 }
 
 void FAffineUiSurface::OnRenderComplete(uint64 Revision, bool bSuccess)
 {
 	check(IsInGameThread());
-	if (Impl->bClosed || !Impl->bInFlight || Revision != Impl->PendingRevision) { return; }
+	if (Impl->bClosed || !Impl->bInFlight || Revision != Impl->PendingRevision)
+	{
+		UE_LOG(LogNativeWebRender, VeryVerbose,
+		       TEXT("Ignored stale render completion revision=%llu (closed=%s inFlight=%s pending=%llu)."),
+		       static_cast<unsigned long long>(Revision), Impl->bClosed ? TEXT("true") : TEXT("false"),
+		       Impl->bInFlight ? TEXT("true") : TEXT("false"),
+		       static_cast<unsigned long long>(Impl->PendingRevision));
+		return;
+	}
 	TSharedRef<FAffineUiSurface, ESPMode::ThreadSafe> KeepAlive = AsShared();
 	(void)KeepAlive;
 	Impl->bInFlight = false;
@@ -376,26 +467,29 @@ void FAffineUiSurface::OnRenderComplete(uint64 Revision, bool bSuccess)
 			if (!Impl->RetirementTicker.IsValid())
 			{
 				TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> WeakSurface = AsShared();
-				Impl->RetirementTicker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakSurface](float)
-				{
-					TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Pinned = WeakSurface.Pin();
-					if (!Pinned || Pinned->Impl->bClosed) { return false; }
-					Pinned->Impl->CollectRetired();
-					const bool bHasPollableFence = Pinned->Impl->Retired.ContainsByPredicate(
-						[](const TUniquePtr<FImpl::FRetiredTexture>& Entry) { return Entry->GpuFence.IsValid(); });
-					if (!bHasPollableFence)
+				Impl->RetirementTicker = FTSTicker::GetCoreTicker().AddTicker(
+					FTickerDelegate::CreateLambda([WeakSurface](float)
 					{
-						Pinned->Impl->RetirementTicker.Reset();
-						return false;
-					}
-					return true;
-				}), 0.25f);
+						TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Pinned = WeakSurface.Pin();
+						if (!Pinned || Pinned->Impl->bClosed) { return false; }
+						Pinned->Impl->CollectRetired();
+						const bool bHasPollableFence = Pinned->Impl->Retired.ContainsByPredicate(
+							[](const TUniquePtr<FImpl::FRetiredTexture>& Entry) { return Entry->GpuFence.IsValid(); });
+						if (!bHasPollableFence)
+						{
+							Pinned->Impl->RetirementTicker.Reset();
+							return false;
+						}
+						return true;
+					}), 0.25f);
 			}
 		}
 		Impl->Output.Reset(Impl->Pending.Get());
 		Impl->OutputDocumentEpoch = Impl->PendingDocumentEpoch;
 		Impl->Pending.Reset();
 		Impl->LastError.Reset();
+		UE_LOG(LogNativeWebRender, VeryVerbose, TEXT("Published render revision=%llu (texture=%dx%d)."),
+		       static_cast<unsigned long long>(Revision), Impl->Output->SizeX, Impl->Output->SizeY);
 		// Hold the surface through callbacks that can close it or drop their last reference.
 		FAffineUiTextureReady Callback = Impl->OnTextureReady;
 		Callback.ExecuteIfBound(Impl->Output.Get());
@@ -405,8 +499,9 @@ void FAffineUiSurface::OnRenderComplete(uint64 Revision, bool bSuccess)
 		Impl->Pending.Reset();
 		if (!bSuccess && Revision == Impl->DesiredRevision)
 		{
-			Impl->LastError = TEXT("AffineUI render submission failed; the previous texture was retained. See LogAffineUiSurfaceRender.");
-			UE_LOG(LogAffineUiSurface, Error, TEXT("%s"), *Impl->LastError);
+			Impl->LastError = TEXT(
+				"AffineUI render submission failed; the previous texture was retained. See LogNativeWebRender.");
+			UE_LOG(LogNativeWebRender, Error, TEXT("%s"), *Impl->LastError);
 			FAffineUiSurfaceError Callback = Impl->OnError;
 			const FString Error = Impl->LastError;
 			Callback.ExecuteIfBound(Error);
@@ -418,7 +513,14 @@ void FAffineUiSurface::OnRenderComplete(uint64 Revision, bool bSuccess)
 void FAffineUiSurface::Close()
 {
 	check(IsInGameThread());
-	if (Impl->bClosed) { return; }
+	if (Impl->bClosed)
+	{
+		UE_LOG(LogNativeWebAffineUi, VeryVerbose, TEXT("Repeated surface close ignored."));
+		return;
+	}
+	UE_LOG(LogNativeWebAffineUi, Display, TEXT("Closing AffineUI surface (revision=%llu epoch=%llu)."),
+	       static_cast<unsigned long long>(Impl->DesiredRevision),
+	       static_cast<unsigned long long>(Impl->DocumentEpoch));
 	Impl->bClosed = true;
 	Impl->OnTextureReady.Unbind();
 	Impl->OnError.Unbind();
@@ -435,4 +537,5 @@ void FAffineUiSurface::Close()
 	Impl->Output.Reset();
 	Impl->Retired.Reset();
 	if (ActiveSurface.Pin().Get() == this) { ActiveSurface.Reset(); }
+	UE_LOG(LogNativeWebAffineUi, Verbose, TEXT("AffineUI surface closed."));
 }

@@ -74,7 +74,8 @@ class NATIVEWEB_API FAffineUiSurface : public TSharedFromThis<FAffineUiSurface, 
 {
 public:
 	/** Returns null and fills OutError when the RHI or descriptor is unsupported. */
-	static TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Create(const FAffineUiSurfaceDesc& Desc, FString& OutError);
+	static TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe>
+	Create(const FAffineUiSurfaceDesc& Desc, FString& OutError);
 	~FAffineUiSurface();
 
 	/** Queue an atomic HTML/CSS replacement. Success means accepted, not rendered. */

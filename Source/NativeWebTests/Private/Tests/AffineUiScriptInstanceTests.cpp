@@ -124,12 +124,12 @@ bool FAffineUiMessageBridgeTest::RunTest(const FString& Parameters)
 			         "globalThis.listenerCount=0;globalThis.lastMessage=null;globalThis.stop=nativeWeb.addMessageListener(m=>{listenerCount++;lastMessage=m});nativeWeb.addMessageListener(()=>{throw new Error('listener boom')});nativeWeb.addMessageListener(m=>{globalThis.afterThrow=m.type})"),
 		         JsError));
 	FNativeWebMessage Outbound;
-	Outbound.Type = ENativeWebPayloadType::Bytes;
+	Outbound.Type = ENativeWebPayloadType::PAYLOAD_BYTES;
 	Outbound.Channel = TEXT("binary");
 	Outbound.Bytes = {4, 5, 6};
 	TestTrue(
 		TEXT("Outbound message enters bounded queue"),
-		Instance->QueueToJavaScript(Outbound) == ENativeWebQueueResult::Queued);
+		Instance->QueueToJavaScript(Outbound) == ENativeWebQueueResult::RESULT_QUEUED);
 	TArray<FNativeWebMessage> ToJavaScript;
 	TestEqual(
 		TEXT("Outbound message is drained on the game thread"), Instance->DrainMessagesToJavaScript(ToJavaScript, 64),
@@ -144,11 +144,11 @@ bool FAffineUiMessageBridgeTest::RunTest(const FString& Parameters)
 		         JsError));
 	TestTrue(TEXT("Listener can unsubscribe more than once"), Instance->Evaluate(TEXT("stop();stop()"), JsError));
 	FNativeWebMessage AfterUnsubscribe;
-	AfterUnsubscribe.Type = ENativeWebPayloadType::String;
+	AfterUnsubscribe.Type = ENativeWebPayloadType::PAYLOAD_STRING;
 	AfterUnsubscribe.String = TEXT("second");
 	TestTrue(
 		TEXT("Second outbound message is queued"),
-		Instance->QueueToJavaScript(AfterUnsubscribe) == ENativeWebQueueResult::Queued);
+		Instance->QueueToJavaScript(AfterUnsubscribe) == ENativeWebQueueResult::RESULT_QUEUED);
 	ToJavaScript.Reset();
 	Instance->DrainMessagesToJavaScript(ToJavaScript, 64);
 	TestFalse(
@@ -159,10 +159,10 @@ bool FAffineUiMessageBridgeTest::RunTest(const FString& Parameters)
 	for (int32 Index = 0; Index < 64; ++Index)
 		TestTrue(
 			TEXT("Outbound queue accepts its configured capacity"),
-			Instance->QueueToJavaScript(Outbound) == ENativeWebQueueResult::Queued);
+			Instance->QueueToJavaScript(Outbound) == ENativeWebQueueResult::RESULT_QUEUED);
 	TestTrue(
 		TEXT("Outbound queue rejects excess entries"),
-		Instance->QueueToJavaScript(Outbound) == ENativeWebQueueResult::QueueFull);
+		Instance->QueueToJavaScript(Outbound) == ENativeWebQueueResult::RESULT_QUEUE_FULL);
 	TestTrue(TEXT("A message can be pending at close"), Instance->Evaluate(
 		         TEXT("nativeWeb.postString('stale')"), JsError));
 	Instance->Close();
@@ -174,7 +174,7 @@ bool FAffineUiMessageBridgeTest::RunTest(const FString& Parameters)
 		TEXT("Close discards pending inbound messages"), Instance->DrainMessagesFromJavaScript(PendingInbound, 64), 0);
 	TestTrue(
 		TEXT("Closed script host rejects messages"),
-		Instance->QueueToJavaScript(Outbound) == ENativeWebQueueResult::Closed);
+		Instance->QueueToJavaScript(Outbound) == ENativeWebQueueResult::RESULT_CLOSED);
 	return true;
 }
 

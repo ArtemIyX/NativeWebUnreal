@@ -1,0 +1,16 @@
+#pragma once
+
+#include "CoreMinimal.h"
+
+// Public categories are exported for game modules that consume the NativeWeb API.
+NATIVEWEB_API DECLARE_LOG_CATEGORY_EXTERN(LogNativeWeb, Log, All);
+NATIVEWEB_API DECLARE_LOG_CATEGORY_EXTERN(LogNativeWebSubsystem, Log, All);
+NATIVEWEB_API DECLARE_LOG_CATEGORY_EXTERN(LogNativeWebView, Log, All);
+NATIVEWEB_API DECLARE_LOG_CATEGORY_EXTERN(LogNativeWebAssets, Log, All);
+NATIVEWEB_API DECLARE_LOG_CATEGORY_EXTERN(LogNativeWebScript, Log, All);
+NATIVEWEB_API DECLARE_LOG_CATEGORY_EXTERN(LogNativeWebMessaging, Log, All);
+NATIVEWEB_API DECLARE_LOG_CATEGORY_EXTERN(LogNativeWebInput, Log, All);
+NATIVEWEB_API DECLARE_LOG_CATEGORY_EXTERN(LogNativeWebViewport, Log, All);
+NATIVEWEB_API DECLARE_LOG_CATEGORY_EXTERN(LogNativeWebAffineUi, Log, All);
+NATIVEWEB_API DECLARE_LOG_CATEGORY_EXTERN(LogNativeWebRender, Log, All);
+NATIVEWEB_API DECLARE_LOG_CATEGORY_EXTERN(LogNativeWebTick, Log, All);

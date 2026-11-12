@@ -12,10 +12,14 @@ class SNativeWebView final : public SCompoundWidget
 {
 public:
 	using FSurfacePtr = TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe>;
-	SLATE_BEGIN_ARGS(SNativeWebView) {}
+	SLATE_BEGIN_ARGS(SNativeWebView)
+		{
+		}
+
 		SLATE_ARGUMENT(UNativeWebView*, View)
 		SLATE_ARGUMENT(FSurfacePtr, Surface)
 	SLATE_END_ARGS()
+
 	void Construct(const FArguments& Args);
 	void SetTexture(UTextureRenderTarget2D* Texture);
 	void SetVisible(bool bVisible);
@@ -33,6 +37,7 @@ public:
 	virtual void OnFocusLost(const FFocusEvent&) override;
 	virtual FReply OnKeyDown(const FGeometry&, const FKeyEvent&) override;
 	virtual FReply OnKeyUp(const FGeometry&, const FKeyEvent&) override;
+
 private:
 	bool ForwardPointer(EAffineUiInputKind Kind, const FGeometry&, const FPointerEvent&);
 	FReply ForwardKey(EAffineUiInputKind Kind, const FKeyEvent&);

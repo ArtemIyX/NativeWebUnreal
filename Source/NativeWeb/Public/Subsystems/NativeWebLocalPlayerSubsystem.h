@@ -13,6 +13,16 @@ class NATIVEWEB_API UNativeWebLocalPlayerSubsystem final : public ULocalPlayerSu
 public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
+
+public:
+
+	UFUNCTION(BlueprintCallable, Category="NativeWeb")
+	UNativeWebView* CreatePackagedView(
+		FName Name,
+		const FString& ContentRelativeDirectory,
+		FNativeWebError& OutError);
+	
+	UFUNCTION(BlueprintCallable, Category="NativeWeb")
 	UNativeWebView* CreateView(FName Name, const FNativeWebViewOptions& Options, FNativeWebError& OutError);
 	
 	UFUNCTION(BlueprintPure, Category="NativeWeb") 
@@ -21,7 +31,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category="NativeWeb") 
 	bool DestroyView(FName Name);
 private:
-	UPROPERTY(Transient) TMap<FName, TObjectPtr<UNativeWebView>> Views;
+	UPROPERTY(Transient)
+	TMap<FName, TObjectPtr<UNativeWebView>> Views;
 	FTSTicker::FDelegateHandle TickHandle;
 	bool Tick(float DeltaTime);
 };

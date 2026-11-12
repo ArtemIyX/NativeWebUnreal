@@ -1,3 +1,5 @@
+
+
 #include "Widgets/NativeWebViewSlate.h"
 
 #include "Engine/TextureRenderTarget2D.h"
@@ -61,6 +63,8 @@ void SNativeWebView::Tick(const FGeometry& Geometry, double, float)
 	if (LocalSize.X <= 0 || LocalSize.Y <= 0) return;
 	const float Scale = Geometry.GetAccumulatedLayoutTransform().GetScale();
 	const double Fit = FMath::Min(1.0, 4096.0 / FMath::Max(LocalSize.X * Scale, LocalSize.Y * Scale));
+
+
 	const FIntPoint Pixels(FMath::Max(1, FMath::RoundToInt(LocalSize.X * Scale * Fit)),
 	                       FMath::Max(1, FMath::RoundToInt(LocalSize.Y * Scale * Fit)));
 	UE_LOG(LogNativeWebViewport, VeryVerbose,

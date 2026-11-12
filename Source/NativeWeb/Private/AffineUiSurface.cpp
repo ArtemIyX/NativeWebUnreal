@@ -1,3 +1,5 @@
+
+
 #include "AffineUiSurface.h"
 
 #include "AffineUiSurfaceRenderer.h"
@@ -17,11 +19,15 @@ namespace
 {
 	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> ActiveSurface;
 
+
+
 	bool IsValidDescriptor(FIntPoint Size, float DpiScale)
 	{
 		return Size.X > 0 && Size.Y > 0 && Size.X <= 4096 && Size.Y <= 4096 &&
 			FMath::IsFinite(DpiScale) && DpiScale > 0.0f && DpiScale <= 8.0f;
 	}
+
+
 
 	bool ContainsEmbeddedNull(const FString& Text)
 	{
@@ -32,6 +38,7 @@ namespace
 class FAffineUiSurface::FImpl
 {
 public:
+
 	struct FRetiredTexture
 	{
 		explicit FRetiredTexture(UTextureRenderTarget2D* InTexture) : Texture(InTexture)
@@ -57,6 +64,8 @@ public:
 		FGPUFenceRHIRef GpuFence;
 		FRenderCommandFence Fence;
 	};
+
+
 
 	void CollectRetired()
 	{
@@ -306,6 +315,8 @@ bool FAffineUiSurface::QueueInput(const FAffineUiInput& Input)
 	}
 	UE_LOG(LogNativeWebInput, VeryVerbose, TEXT("Dispatching surface input kind=%d at (%.3f, %.3f)."),
 	       static_cast<int32>(Input.Kind), Input.Position.X, Input.Position.Y);
+
+
 	const FIntPoint Size(Impl->Output->SizeX, Impl->Output->SizeY);
 	Impl->Renderer.DispatchInput(Input, Size, Impl->DocumentEpoch, AsShared());
 	return true;

@@ -1,4 +1,6 @@
-﻿#include "Networking/NativeWebWebSocketServerBackend.h"
+﻿
+
+#include "Networking/NativeWebWebSocketServerBackend.h"
 
 #include "Logging/NativeWebWebSocketLog.h"
 #include "Networking/NativeWebWebSocketNetwork.h"
@@ -9,11 +11,14 @@ THIRD_PARTY_INCLUDES_START
 THIRD_PARTY_INCLUDES_END
 #undef UI
 
+
 enum class ENativeWebWebSocketFragmentationState : uint8
 {
 	BeginFrame,
+
 	MessageFrame,
 };
+
 
 struct FNativeWebWebSocketPerSessionDataServer
 {
@@ -22,6 +27,8 @@ struct FNativeWebWebSocketPerSessionDataServer
 	ENativeWebWebSocketFragmentationState FragmentationState = ENativeWebWebSocketFragmentationState::BeginFrame;
 	bool bBinaryFrame = false;
 };
+
+
 
 static int NativeWebWebSocketNetworkingServerCallback(struct lws* InWsi, enum lws_callback_reasons InReason, void* InUser, void* In, size_t InLen)
 {
@@ -98,6 +105,7 @@ FNativeWebWebSocketServerBackend::~FNativeWebWebSocketServerBackend()
 }
 
 bool FNativeWebWebSocketServerBackend::Init(uint32 InPort, FNativeWebWebSocketNetworkClientConnectedCallback InOnConnected, FNativeWebWebSocketNetworkClientDisconnectedCallback InOnDisconnected)
+
 {
 	Protocols = new lws_protocols[2];
 	FMemory::Memzero(Protocols, sizeof(lws_protocols) * 2);

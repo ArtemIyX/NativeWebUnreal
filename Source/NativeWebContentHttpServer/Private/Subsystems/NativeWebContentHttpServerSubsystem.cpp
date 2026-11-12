@@ -1,7 +1,4 @@
-/**
- * @file NativeWebContentHttpServer/Private/Subsystems/NativeWebContentHttpServerSubsystem.cpp
- * @brief Subsystem lifecycle and module-service forwarding.
- */
+
 #include "Subsystems/NativeWebContentHttpServerSubsystem.h"
 
 #include "NativeWebContentHttpServer.h"

@@ -1,4 +1,6 @@
-﻿#include "Networking/NativeWebWebSocketNetwork.h"
+﻿
+
+#include "Networking/NativeWebWebSocketNetwork.h"
 
 #include "Logging/NativeWebWebSocketLog.h"
 
@@ -61,6 +63,8 @@ bool FNativeWebWebSocketNetwork::Send(const uint8* InData, uint32 InSize, bool b
 	buffer.Append(InData, InSize);
 
 	{
+
+
 		FScopeLock lock(&OutgoingLock);
 		OutgoingBuffer.Add(MoveTemp(buffer));
 	}
@@ -93,6 +97,8 @@ void FNativeWebWebSocketNetwork::FlushInternal()
 	{
 		int32 messageCount = 0;
 		{
+
+
 			FScopeLock lock(&OutgoingLock);
 			messageCount = OutgoingBuffer.Num();
 		}
@@ -115,6 +121,8 @@ void FNativeWebWebSocketNetwork::Close(uint16 InStatusCode, const FString& InRea
 	TArray<uint8> reasonBytes;
 	if (!InReason.IsEmpty())
 	{
+
+
 		FTCHARToUTF8 utf8Reason(*InReason);
 		reasonBytes.Append(reinterpret_cast<const uint8*>(utf8Reason.Get()), utf8Reason.Length());
 	}
@@ -140,9 +148,12 @@ FString FNativeWebWebSocketNetwork::LocalEndPoint(bool bInAppendPort)
 	const int32 sock = static_cast<int32>(lws_get_socket_fd(Wsi));
 	struct sockaddr_in localAddr;
 	socklen_t localAddrLen = sizeof(localAddr);
+
 	getsockname(sock, reinterpret_cast<struct sockaddr*>(&localAddr), &localAddrLen);
 
 	ANSICHAR ipBuffer[INET_ADDRSTRLEN];
+
+
 	FString local(ANSI_TO_TCHAR(inet_ntop(AF_INET, &localAddr.sin_addr, ipBuffer, INET_ADDRSTRLEN)));
 	if (bInAppendPort)
 	{
@@ -160,6 +171,8 @@ void FNativeWebWebSocketNetwork::OnRawWebSocketWritable(NativeWebWebSocketIntern
 {
 	TArray<uint8> packet;
 	{
+
+
 		FScopeLock lock(&OutgoingLock);
 		if (OutgoingBuffer.Num() == 0)
 		{

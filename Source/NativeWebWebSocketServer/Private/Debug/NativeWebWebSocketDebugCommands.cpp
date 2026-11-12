@@ -1,3 +1,5 @@
+
+
 #include "Debug/NativeWebWebSocketDebugCommands.h"
 
 #include "Config/NativeWebWebSocketCVars.h"
@@ -187,6 +189,8 @@ void FNativeWebWebSocketDebugCommands::HandleStop(const TArray<FString>& InArgs)
 		return;
 	}
 
+
+
 	const FName nameId(*InArgs[0]);
 	const bool bStopped = subsystem->StopServer(nameId);
 	UE_LOG(LogNativeWebWebSocketServer, Log, TEXT("ws.stop: name=%s stopped=%s"), *nameId.ToString(), bStopped ? TEXT("true") : TEXT("false"));
@@ -206,6 +210,8 @@ void FNativeWebWebSocketDebugCommands::HandleKick(const TArray<FString>& InArgs)
 		UE_LOG(LogNativeWebWebSocketServer, Warning, TEXT("ws.kick: subsystem not available"));
 		return;
 	}
+
+
 
 	const FName nameId(*InArgs[0]);
 	UNativeWebWebSocketServerBase* server = subsystem->GetServer(nameId);
@@ -240,6 +246,8 @@ void FNativeWebWebSocketDebugCommands::HandleStats(const TArray<FString>& InArgs
 		UE_LOG(LogNativeWebWebSocketServer, Warning, TEXT("ws.stats: subsystem not available"));
 		return;
 	}
+
+
 
 	const FName nameId(*InArgs[0]);
 	UNativeWebWebSocketServerBase* server = subsystem->GetServer(nameId);
@@ -286,6 +294,8 @@ void FNativeWebWebSocketDebugCommands::HandleClients(const TArray<FString>& InAr
 		UE_LOG(LogNativeWebWebSocketServer, Warning, TEXT("ws.clients: subsystem not available"));
 		return;
 	}
+
+
 
 	const FName nameId(*InArgs[0]);
 	UNativeWebWebSocketServerBase* server = subsystem->GetServer(nameId);
@@ -340,6 +350,8 @@ void FNativeWebWebSocketDebugCommands::HandleBenchSend(const TArray<FString>& In
 		UE_LOG(LogNativeWebWebSocketServer, Warning, TEXT("ws.benchsend: subsystem not available"));
 		return;
 	}
+
+
 
 	const FName nameId(*InArgs[0]);
 	UNativeWebWebSocketServerBase* server = subsystem->GetServer(nameId);

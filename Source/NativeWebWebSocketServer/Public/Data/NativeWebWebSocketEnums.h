@@ -7,7 +7,7 @@
 #include "CoreMinimal.h"
 #include "NativeWebWebSocketEnums.generated.h"
 
-/** @brief Result of creating or reusing a NativeWebWebSocket WebSocket server. */
+/** @brief Result of creating or reusing a NativeWebWebSocket server. @ingroup NativeWebWebSocketServer */
 UENUM(BlueprintType)
 enum class ENativeWebWebSocketCreateResult : uint8
 {
@@ -21,7 +21,7 @@ enum class ENativeWebWebSocketCreateResult : uint8
 	Failed = 3
 };
 
-/** @brief Result of sending data through a NativeWebWebSocket WebSocket server. */
+/** @brief Result of sending data through a NativeWebWebSocket server. @ingroup NativeWebWebSocketServer */
 UENUM(BlueprintType)
 enum class ENativeWebWebSocketSendResult : uint8
 {
@@ -102,4 +102,3 @@ enum class ENativeWebWebSocketPayloadFormat : uint8
 	/** A format defined by the consuming system. */
 	Custom = 4
 };
-

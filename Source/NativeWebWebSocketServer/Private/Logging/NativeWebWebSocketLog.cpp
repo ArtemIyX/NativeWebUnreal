@@ -1,4 +1,6 @@
-﻿#include "Logging/NativeWebWebSocketLog.h"
+﻿
+
+#include "Logging/NativeWebWebSocketLog.h"
 
 DEFINE_LOG_CATEGORY(LogNativeWebWebSocket);
 DEFINE_LOG_CATEGORY(LogNativeWebWebSocketServer);

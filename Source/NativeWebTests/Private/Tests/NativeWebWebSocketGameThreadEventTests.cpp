@@ -1,3 +1,5 @@
+
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Tests/NativeWebWebSocketGameThreadEventTestTypes.h"
@@ -21,9 +23,12 @@ constexpr EAutomationTestFlags GameThreadEventTestFlags =
 
 }
 
+
 class FNativeWebWebSocketGameThreadEventTestAccess
 {
 public:
+
+
 	static void BeginRun(UNativeWebWebSocketGameThreadEventTestServer& InServer, FName InNameId)
 	{
 		check(IsInGameThread());
@@ -37,10 +42,14 @@ public:
 		InServer.ClientClass = UNativeWebWebSocketGameThreadEventTestClient::StaticClass();
 	}
 
+
+
 	static void NotifyConnected(UNativeWebWebSocketServerBase& InServer, const FNativeWebWebSocketClientInfo& InInfo)
 	{
 		InServer.NotifyClientConnected(InInfo);
 	}
+
+
 
 	static void NotifyDisconnected(UNativeWebWebSocketServerBase& InServer, int64 InClientId,
 		ENativeWebWebSocketCloseReason InReason)
@@ -48,11 +57,15 @@ public:
 		InServer.NotifyClientDisconnected(InClientId, InReason);
 	}
 
+
+
 	static void NotifyServerError(UNativeWebWebSocketServerBase& InServer, ENativeWebWebSocketErrorCode InErrorCode,
 		const FString& InMessage)
 	{
 		InServer.NotifyServerError(InErrorCode, InMessage);
 	}
+
+
 
 	static void NotifyClientError(UNativeWebWebSocketServerBase& InServer, int64 InClientId,
 		ENativeWebWebSocketErrorCode InErrorCode, const FString& InMessage)
@@ -60,37 +73,53 @@ public:
 		InServer.NotifyClientError(InClientId, InErrorCode, InMessage);
 	}
 
+
+
 	static void NotifyMessage(UNativeWebWebSocketServerBase& InServer, int64 InClientId,
 		const TArray<uint8>& InPayload, bool bInBinary)
 	{
 		InServer.NotifyClientMessage(InClientId, InPayload, bInBinary);
 	}
 
+
+
 	static int32 Drain(UNativeWebWebSocketServerBase& InServer, int32 InMaxEvents)
 	{
 		return InServer.DrainGameThreadEvents(InMaxEvents);
 	}
+
+
 
 	static int32 Depth(const UNativeWebWebSocketServerBase& InServer)
 	{
 		return InServer.GetGameThreadEventQueueDepth();
 	}
 
+
+
 	static uint64 Generation(const UNativeWebWebSocketServerBase& InServer)
 	{
 		return InServer.GameThreadEventState->Generation.Load();
 	}
+
+
 
 	static void Dispatch(UNativeWebWebSocketServerBase& InServer, FNativeWebWebSocketGameThreadEvent&& InEvent)
 	{
 		InServer.DispatchGameThreadEvent(MoveTemp(InEvent));
 	}
 
+
+
 	static void PreparePendingClient(UNativeWebWebSocketServerBase& InServer, int64 InClientId)
 	{
+
+
 		FScopeLock lock(&InServer.ClientObjectsLock);
 		InServer.PendingClientMessages.FindOrAdd(InClientId);
 	}
+
+
 
 	static void AddServer(UNativeWebWebSocketSubsystem& InSubsystem, FName InNameId,
 		UNativeWebWebSocketServerBase* InServer)
@@ -98,10 +127,13 @@ public:
 		InSubsystem.Servers.Add(InNameId, InServer);
 	}
 
+
+
 	static void InvokeServerInitialized(UNativeWebWebSocketServerBase& InServer, UNativeWebWebSocketSubsystem* InSubsystem)
 	{
 		InServer.ServerInitialized(InSubsystem);
 	}
+
 };
 
 namespace
@@ -124,8 +156,12 @@ private:
 	TFunction<void()> Function;
 };
 
+
+
 void RunOnWorker(TFunction<void()>&& InFunction)
 {
+
+
 	FTestRunnable runnable(MoveTemp(InFunction));
 	FRunnableThread* thread = FRunnableThread::Create(&runnable, TEXT("NativeWebWebSocketGameThreadEventTest"));
 	if (!thread)
@@ -135,6 +171,8 @@ void RunOnWorker(TFunction<void()>&& InFunction)
 	thread->WaitForCompletion();
 	delete thread;
 }
+
+
 
 void RunOnWorkers(TArray<TFunction<void()>>&& InFunctions)
 {
@@ -156,6 +194,8 @@ void RunOnWorkers(TArray<TFunction<void()>>&& InFunctions)
 		}
 	}
 }
+
+
 
 UNativeWebWebSocketGameThreadEventTestServer* MakeServer(FAutomationTestBase& InTest, FName InNameId = TEXT("Test"))
 {
@@ -179,14 +219,19 @@ UNativeWebWebSocketGameThreadEventTestServer* MakeServer(FAutomationTestBase& In
 	return server;
 }
 
+
+
 FNativeWebWebSocketClientInfo MakeClientInfo(int64 InClientId)
 {
 	FNativeWebWebSocketClientInfo info;
 	info.ClientId = InClientId;
 	info.RemoteAddress = FString::Printf(TEXT("127.0.0.1:%lld"), InClientId);
 	info.ConnectedAt = FDateTime::Now();
+
 	return info;
 }
+
+
 
 UGameInstance* MakeGameInstance()
 {
@@ -217,6 +262,8 @@ struct FScopedCVarValue
 	}
 };
 
+
+
 int32 CountRecord(const UNativeWebWebSocketGameThreadEventTestServer& InServer, const FString& InRecord)
 {
 	int32 count = 0;
@@ -226,6 +273,8 @@ int32 CountRecord(const UNativeWebWebSocketGameThreadEventTestServer& InServer, 
 	}
 	return count;
 }
+
+
 
 void CheckGameThreadCallbacks(FAutomationTestBase& InTest,
 	const UNativeWebWebSocketGameThreadEventTestServer& InServer)
@@ -379,6 +428,8 @@ void UNativeWebWebSocketGameThreadEventTestServer::ServerInitialized(UNativeWebW
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketWorkerThreadDefersDispatchTest,
 	"NativeWebWebSocket.GameThreadEvents.WorkerThreadDefersDispatch", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketWorkerThreadDefersDispatchTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
@@ -405,6 +456,8 @@ bool FNativeWebWebSocketWorkerThreadDefersDispatchTest::RunTest(const FString& P
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketGameThreadDispatchSynchronousTest,
 	"NativeWebWebSocket.GameThreadEvents.GameThreadDispatchIsSynchronous", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketGameThreadDispatchSynchronousTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
@@ -424,6 +477,8 @@ bool FNativeWebWebSocketGameThreadDispatchSynchronousTest::RunTest(const FString
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketMixedEventsPreserveFifoTest,
 	"NativeWebWebSocket.GameThreadEvents.MixedEventsPreserveFifoAndPayloads", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketMixedEventsPreserveFifoTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
@@ -456,6 +511,8 @@ bool FNativeWebWebSocketMixedEventsPreserveFifoTest::RunTest(const FString& Para
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketFrameBudgetExactTest,
 	"NativeWebWebSocket.GameThreadEvents.FrameBudgetIsExact", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketFrameBudgetExactTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
@@ -478,8 +535,12 @@ bool FNativeWebWebSocketFrameBudgetExactTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketGlobalBudgetAcrossServersTest,
 	"NativeWebWebSocket.GameThreadEvents.GlobalBudgetAcrossServers", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketGlobalBudgetAcrossServersTest::RunTest(const FString& Parameters)
 {
+
+
 	FScopedCVarValue budget(TEXT("cefws.game_thread_events_per_tick"), 512);
 	UNativeWebWebSocketGameThreadEventTestServer* first = MakeServer(*this, TEXT("First"));
 	UNativeWebWebSocketGameThreadEventTestServer* second = MakeServer(*this, TEXT("Second"));
@@ -506,8 +567,12 @@ bool FNativeWebWebSocketGlobalBudgetAcrossServersTest::RunTest(const FString& Pa
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketBusyServerRoundRobinTest,
 	"NativeWebWebSocket.GameThreadEvents.BusyServerDoesNotStarveOtherServers", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketBusyServerRoundRobinTest::RunTest(const FString& Parameters)
 {
+
+
 	FScopedCVarValue budget(TEXT("cefws.game_thread_events_per_tick"), 2);
 	UNativeWebWebSocketGameThreadEventTestServer* first = MakeServer(*this, TEXT("Busy"));
 	UNativeWebWebSocketGameThreadEventTestServer* second = MakeServer(*this, TEXT("Other"));
@@ -534,8 +599,12 @@ bool FNativeWebWebSocketBusyServerRoundRobinTest::RunTest(const FString& Paramet
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketConcurrentProducersLosslessTest,
 	"NativeWebWebSocket.GameThreadEvents.ConcurrentProducersAreLosslessWithinCapacity", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketConcurrentProducersLosslessTest::RunTest(const FString& Parameters)
 {
+
+
 	FScopedCVarValue capacity(TEXT("cefws.game_thread_event_queue_max"), 256);
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
 	if (!server)
@@ -571,8 +640,12 @@ bool FNativeWebWebSocketConcurrentProducersLosslessTest::RunTest(const FString& 
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketQueueCapacityAtomicTest,
 	"NativeWebWebSocket.GameThreadEvents.QueueCapacityIsAtomic", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketQueueCapacityAtomicTest::RunTest(const FString& Parameters)
 {
+
+
 	FScopedCVarValue capacity(TEXT("cefws.game_thread_event_queue_max"), 8);
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
 	if (!server)
@@ -603,8 +676,12 @@ bool FNativeWebWebSocketQueueCapacityAtomicTest::RunTest(const FString& Paramete
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketMessageOverflowNoRecursionTest,
 	"NativeWebWebSocket.GameThreadEvents.MessageOverflowDoesNotRecurse", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketMessageOverflowNoRecursionTest::RunTest(const FString& Parameters)
 {
+
+
 	FScopedCVarValue capacity(TEXT("cefws.game_thread_event_queue_max"), 4);
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
 	if (!server)
@@ -626,8 +703,12 @@ bool FNativeWebWebSocketMessageOverflowNoRecursionTest::RunTest(const FString& P
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketControlEventsRemainConsistentTest,
 	"NativeWebWebSocket.GameThreadEvents.ControlEventsRemainConsistentAtCapacity", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketControlEventsRemainConsistentTest::RunTest(const FString& Parameters)
 {
+
+
 	FScopedCVarValue capacity(TEXT("cefws.game_thread_event_queue_max"), 4);
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
 	if (!server)
@@ -652,6 +733,8 @@ bool FNativeWebWebSocketControlEventsRemainConsistentTest::RunTest(const FString
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketStopRejectsAndFlushesTest,
 	"NativeWebWebSocket.GameThreadEvents.StopRejectsAndFlushesEvents", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketStopRejectsAndFlushesTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
@@ -677,6 +760,8 @@ bool FNativeWebWebSocketStopRejectsAndFlushesTest::RunTest(const FString& Parame
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketRestartRejectsOldGenerationTest,
 	"NativeWebWebSocket.GameThreadEvents.RestartRejectsOldGeneration", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketRestartRejectsOldGenerationTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
@@ -704,6 +789,8 @@ bool FNativeWebWebSocketRestartRejectsOldGenerationTest::RunTest(const FString& 
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketStopDuringCallbackSafeTest,
 	"NativeWebWebSocket.GameThreadEvents.StopDuringCallbackIsSafe", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketStopDuringCallbackSafeTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
@@ -724,6 +811,8 @@ bool FNativeWebWebSocketStopDuringCallbackSafeTest::RunTest(const FString& Param
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketClientConnectedOrderingTest,
 	"NativeWebWebSocket.GameThreadEvents.ClientConnectedCreatesClientBeforeCallbacks", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketClientConnectedOrderingTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
@@ -742,6 +831,8 @@ bool FNativeWebWebSocketClientConnectedOrderingTest::RunTest(const FString& Para
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketMessageBeforeClientBufferedTest,
 	"NativeWebWebSocket.GameThreadEvents.MessageBeforeClientIsBuffered", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketMessageBeforeClientBufferedTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
@@ -764,6 +855,8 @@ bool FNativeWebWebSocketMessageBeforeClientBufferedTest::RunTest(const FString& 
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketDisconnectOrderingTest,
 	"NativeWebWebSocket.GameThreadEvents.DisconnectRemovesClientBeforeCallbacks", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketDisconnectOrderingTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
@@ -784,6 +877,8 @@ bool FNativeWebWebSocketDisconnectOrderingTest::RunTest(const FString& Parameter
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketGenericMessageOnceTest,
 	"NativeWebWebSocket.GameThreadEvents.GenericMessageHandlerRunsOnce", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketGenericMessageOnceTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
@@ -801,6 +896,8 @@ bool FNativeWebWebSocketGenericMessageOnceTest::RunTest(const FString& Parameter
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketByteAndTextRoutingTest,
 	"NativeWebWebSocket.GameThreadEvents.ByteAndTextRoutingMatchesExistingContract", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketByteAndTextRoutingTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
@@ -823,6 +920,8 @@ bool FNativeWebWebSocketByteAndTextRoutingTest::RunTest(const FString& Parameter
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketInvalidClientMessageTest,
 	"NativeWebWebSocket.GameThreadEvents.InvalidClientMessageIsDiscarded", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketInvalidClientMessageTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);
@@ -837,6 +936,8 @@ bool FNativeWebWebSocketInvalidClientMessageTest::RunTest(const FString& Paramet
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebWebSocketServerInitializedThreadTest,
 	"NativeWebWebSocket.GameThreadEvents.ServerInitializedRunsOnGameThread", GameThreadEventTestFlags)
+
+
 bool FNativeWebWebSocketServerInitializedThreadTest::RunTest(const FString& Parameters)
 {
 	UNativeWebWebSocketGameThreadEventTestServer* server = MakeServer(*this);

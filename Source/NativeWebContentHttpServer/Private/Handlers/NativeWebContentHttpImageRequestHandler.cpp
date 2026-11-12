@@ -1,7 +1,4 @@
-/**
- * @file NativeWebContentHttpServer/Private/Handlers/NativeWebContentHttpImageRequestHandler.cpp
- * @brief Base handler default implementation.
- */
+
 #include "Handlers/NativeWebContentHttpImageRequestHandler.h"
 
 bool UNativeWebContentHttpImageRequestHandler::HandleImageRequest_Implementation(const FNativeWebContentHttpImageRequestContext& InRequestContext, FNativeWebContentHttpImageResponse& OutResponse, FString& OutError)

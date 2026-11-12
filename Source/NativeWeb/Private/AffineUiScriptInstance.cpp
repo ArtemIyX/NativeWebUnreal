@@ -1,3 +1,5 @@
+
+
 #include "AffineUiScriptInstance.h"
 #include "NativeWeb.h"
 
@@ -6,6 +8,8 @@
 
 namespace
 {
+
+
 	bool HasEmbeddedNull(const FString& Value)
 	{
 		return FCString::Strlen(*Value) != Value.Len();
@@ -30,6 +34,8 @@ TUniquePtr<FAffineUiScriptInstance> FAffineUiScriptInstance::Create(const FAffin
 		NewSurface->Close();
 		return nullptr;
 	}
+
+
 	TUniquePtr<FAffineUiScriptInstance> Instance(new FAffineUiScriptInstance());
 	Instance->Surface = MoveTemp(NewSurface);
 	Instance->DocumentEpoch = Instance->Surface->GetDocumentEpoch();
@@ -181,9 +187,13 @@ bool FAffineUiScriptInstance::PumpJobs(int32 MaxJobs, int32& OutExecuted, bool& 
 
 namespace
 {
+
+
 	int64 MessageSize(const FNativeWebMessage& Message)
 	{
 		if (Message.Type == ENativeWebPayloadType::PAYLOAD_BYTES) return Message.Bytes.Num();
+
+
 		const FTCHARToUTF8 Utf8(*Message.String, Message.String.Len());
 		return Utf8.Length();
 	}
@@ -198,6 +208,8 @@ ENativeWebQueueResult FAffineUiScriptInstance::QueueToJavaScript(const FNativeWe
 		return ENativeWebQueueResult::RESULT_CLOSED;
 	}
 	const int64 Size = MessageSize(Message);
+
+
 	FScopeLock Lock(&MessageMutex);
 	if (Size > 1024 * 1024 || OutboundMessages.Num() >= 64 || OutboundBytes + Size > 4 * 1024 * 1024)
 	{
@@ -217,6 +229,8 @@ ENativeWebQueueResult FAffineUiScriptInstance::QueueToJavaScript(const FNativeWe
 int32 FAffineUiScriptInstance::DrainMessagesFromJavaScript(TArray<FNativeWebMessage>& OutMessages, int32 MaxMessages)
 {
 	check(IsInGameThread());
+
+
 	FScopeLock Lock(&MessageMutex);
 	const int32 Count = FMath::Min(MaxMessages, InboundMessages.Num());
 	OutMessages.Reserve(OutMessages.Num() + Count);
@@ -238,6 +252,8 @@ int32 FAffineUiScriptInstance::DrainMessagesFromJavaScript(TArray<FNativeWebMess
 int32 FAffineUiScriptInstance::DrainMessagesToJavaScript(TArray<FNativeWebMessage>& OutMessages, int32 MaxMessages)
 {
 	check(IsInGameThread());
+
+
 	FScopeLock Lock(&MessageMutex);
 	const int32 Count = FMath::Min(MaxMessages, OutboundMessages.Num());
 	OutMessages.Reserve(OutMessages.Num() + Count);
@@ -290,11 +306,15 @@ bool FAffineUiScriptInstance::DeliverMessageToJavaScript(const FNativeWebMessage
 	JSValue Item = JS_NewObject(Context);
 	if (!Message.Channel.IsNone())
 	{
+
+
 		const FTCHARToUTF8 Channel(*Message.Channel.ToString());
 		JS_SetPropertyStr(Context, Item, "channel", JS_NewStringLen(Context, Channel.Get(), Channel.Length()));
 	}
 	if (Message.Type == ENativeWebPayloadType::PAYLOAD_STRING)
 	{
+
+
 		const FTCHARToUTF8 Value(*Message.String, Message.String.Len());
 		JS_SetPropertyStr(Context, Item, "type", JS_NewString(Context, "string"));
 		JS_SetPropertyStr(Context, Item, "value", JS_NewStringLen(Context, Value.Get(), Value.Length()));
@@ -359,6 +379,8 @@ JSValue FAffineUiScriptInstance::PostString(JSContext* Context, JSValueConst, in
 	}
 	FNativeWebMessage Message;
 	Message.Type = ENativeWebPayloadType::PAYLOAD_STRING;
+
+
 	const FUTF8ToTCHAR ValueText(ValueUtf8, static_cast<int32>(ValueLength));
 	Message.String = FString(ValueText.Length(), ValueText.Get());
 	JS_FreeCString(Context, ValueUtf8);
@@ -370,6 +392,8 @@ JSValue FAffineUiScriptInstance::PostString(JSContext* Context, JSValueConst, in
 		if (!bValid) return JS_ThrowTypeError(Context, "channel must be a valid string");
 		Message.Channel = FName(*Channel);
 	}
+
+
 	FScopeLock Lock(&Instance->MessageMutex);
 	const int64 Size = static_cast<int64>(ValueLength);
 	if (Instance->InboundMessages.Num() >= 64 || Instance->InboundBytes + Size > 4 * 1024 * 1024)
@@ -462,6 +486,8 @@ JSValue FAffineUiScriptInstance::PostBytes(JSContext* Context, JSValueConst, int
 		if (!bValid) return JS_ThrowTypeError(Context, "channel must be a valid string");
 		Message.Channel = FName(*Channel);
 	}
+
+
 	FScopeLock Lock(&Instance->MessageMutex);
 	if (Instance->InboundMessages.Num() >= 64 || Instance->InboundBytes + static_cast<int64>(Length) > 4 * 1024 * 1024)
 	{
@@ -488,7 +514,11 @@ FString FAffineUiScriptInstance::ReadString(JSContext* Context, JSValueConst Val
 		return FString();
 	}
 	const int32 SafeLength = static_cast<int32>(FMath::Min<size_t>(Length, MAX_int32));
+
+
 	const FUTF8ToTCHAR Converted(Utf8, SafeLength);
+
+
 	FString Result(Converted.Length(), Converted.Get());
 	JS_FreeCString(Context, Utf8);
 	bOutValid = !HasEmbeddedNull(Result);
@@ -714,6 +744,8 @@ void FAffineUiScriptInstance::Close()
 	       InboundMessages.Num(), OutboundMessages.Num());
 	bClosing = true;
 	{
+
+
 		FScopeLock Lock(&MessageMutex);
 		InboundMessages.Reset();
 		OutboundMessages.Reset();

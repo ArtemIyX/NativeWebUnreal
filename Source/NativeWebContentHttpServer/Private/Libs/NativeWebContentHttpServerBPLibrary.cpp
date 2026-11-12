@@ -1,7 +1,4 @@
-/**
- * @file NativeWebContentHttpServer/Private/Libs/NativeWebContentHttpServerBPLibrary.cpp
- * @brief Blueprint helper implementation.
- */
+
 #include "Libs/NativeWebContentHttpServerBPLibrary.h"
 
 #include "NativeWebContentHttpServer.h"

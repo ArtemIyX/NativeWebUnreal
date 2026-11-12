@@ -47,4 +47,3 @@ struct NATIVEWEBWEBSOCKETSERVER_API FNativeWebWebSocketWritePacket
 	/** Whether the payload must be written as binary data. */
 	bool bBinary = true;
 };
-

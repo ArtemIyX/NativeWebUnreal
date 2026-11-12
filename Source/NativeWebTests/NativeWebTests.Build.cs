@@ -1,5 +1,16 @@
-﻿using UnrealBuildTool;
+﻿/**
+ * @file Source/NativeWebTests/NativeWebTests.Build.cs
+ * @brief Defines Unreal Build Tool rules for the NativeWebTests module.
+ * @details Uncooked automation tests for the NativeWeb plugin.
+ * @ingroup NativeWebTests
+ */
 
+using UnrealBuildTool;
+
+/**
+ * @brief Declares the native web tests type and its operations.
+ * @ingroup NativeWebTests
+ */
 public class NativeWebTests : ModuleRules
 {
     public NativeWebTests(ReadOnlyTargetRules Target) : base(Target)

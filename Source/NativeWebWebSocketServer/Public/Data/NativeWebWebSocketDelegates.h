@@ -11,17 +11,19 @@
 #include "NativeWebWebSocketDelegates.generated.h"
 
 UDELEGATE()
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FNativeWebWebSocketClientConnectedDynamic, 
-	const FNativeWebWebSocketClientInfo&, Client);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FNativeWebWebSocketClientConnectedDynamic,
+                                            const FNativeWebWebSocketClientInfo&, Client);
 
 UDELEGATE()
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FNativeWebWebSocketClientDisconnectedDynamic, 
-	int64, ClientId, ENativeWebWebSocketCloseReason, Reason);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FNativeWebWebSocketClientDisconnectedDynamic,
+                                             int64, ClientId, ENativeWebWebSocketCloseReason, Reason);
 
 UDELEGATE()
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FNativeWebWebSocketServerErrorDynamic, 
-	FName, ServerName, ENativeWebWebSocketErrorCode, ErrorCode, const FString&, Message);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FNativeWebWebSocketServerErrorDynamic,
+                                               FName, ServerName, ENativeWebWebSocketErrorCode, ErrorCode,
+                                               const FString&, Message);
 
 UDELEGATE()
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FNativeWebWebSocketClientErrorDynamic,
-	int64, ClientId, ENativeWebWebSocketErrorCode, ErrorCode, const FString&, Message);
+                                               int64, ClientId, ENativeWebWebSocketErrorCode, ErrorCode, const FString&,
+                                               Message);

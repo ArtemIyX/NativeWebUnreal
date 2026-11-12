@@ -25,6 +25,10 @@ struct FNativeWebWebSocketClientErrorEvent;
 struct FNativeWebWebSocketClientMessageEvent;
 class FNativeWebWebSocketGameThreadEventState;
 #if WITH_DEV_AUTOMATION_TESTS
+/**
+ * @brief Declares the f native web web socket game thread event test access type and its operations.
+ * @ingroup NativeWebWebSocketServer
+ */
 class FNativeWebWebSocketGameThreadEventTestAccess;
 #endif
 
@@ -34,7 +38,11 @@ struct NATIVEWEBWEBSOCKETSERVER_API FNativeWebWebSocketGameThreadEventStateDelet
 	void operator()(FNativeWebWebSocketGameThreadEventState* InState) const;
 };
 
-/** @brief Type declaration. */
+/**
+ * @brief UObject-facing base class for a managed NativeWebWebSocket server.
+ * @details Public lifecycle and message APIs are game-thread owned; networking is performed by the private worker pipeline and events are marshalled back to the game thread.
+ * @ingroup NativeWebWebSocketServer
+ */
 UCLASS(BlueprintType, Blueprintable)
 class NATIVEWEBWEBSOCKETSERVER_API UNativeWebWebSocketServerBase : public UObject
 {
@@ -43,10 +51,28 @@ class NATIVEWEBWEBSOCKETSERVER_API UNativeWebWebSocketServerBase : public UObjec
 public:
 
 	UNativeWebWebSocketServerBase(const FObjectInitializer& ObjectInitializer);
-	/** @brief Releases the opaque event queue state after producer shutdown. */
+	/** @brief Releases the opaque event queue state after producer shutdown.
+ * @return The value produced by this operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * ~UNativeWebWebSocketServerBase();
+ * @endcode
+ */
 	virtual ~UNativeWebWebSocketServerBase() override;
 public:
 #pragma region Lifecycle
+
+/**
+ * @brief Performs UObject destruction-time cleanup.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * BeginDestroy();
+ * @endcode
+ */
 
 	virtual void BeginDestroy() override;
 
@@ -56,170 +82,307 @@ public:
 #pragma region BlueprintEvents
 	/** Fired after a client connection has been accepted and its client object initialized. */
 	UPROPERTY(BlueprintAssignable, Category = "NativeWebWebSocket|Events")
+	/** @brief Reflected data field `OnClientConnected`. */
 	FNativeWebWebSocketClientConnectedDynamic OnClientConnected;
 
 	/** Fired after a client has disconnected from the server. */
 	UPROPERTY(BlueprintAssignable, Category = "NativeWebWebSocket|Events")
+	/** @brief Reflected data field `OnClientDisconnected`. */
 	FNativeWebWebSocketClientDisconnectedDynamic OnClientDisconnected;
 
 	/** Fired when the server reports a server-level error. */
 	UPROPERTY(BlueprintAssignable, Category = "NativeWebWebSocket|Events")
+	/** @brief Reflected data field `OnServerError`. */
 	FNativeWebWebSocketServerErrorDynamic OnServerError;
 
 	/** Fired when the server reports an error associated with a specific client. */
 	UPROPERTY(BlueprintAssignable, Category = "NativeWebWebSocket|Events")
+	/** @brief Reflected data field `OnClientError`. */
 	FNativeWebWebSocketClientErrorDynamic OnClientError;
 #pragma endregion
 
 public:
 #pragma region PublicApi
-	/** @brief Returns the identifier assigned to this server instance. @return Server identifier, or NAME_None before initialization. */
+	/** @brief Returns the identifier assigned to this server instance. @return Server identifier, or NAME_None before initialization.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * GetServerNameId();
+ * @endcode
+ */
 	UFUNCTION(BlueprintPure, Category = "NativeWebWebSocket")
 	FName GetServerNameId() const { return NameId; }
 
-	/** @brief Returns the configured port. @return Requested or assigned TCP port, or zero before configuration. */
+	/** @brief Returns the configured port. @return Requested or assigned TCP port, or zero before configuration.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * GetBoundPort();
+ * @endcode
+ */
 	UFUNCTION(BlueprintPure, Category = "NativeWebWebSocket")
 	int32 GetBoundPort() const { return BoundPort; }
 
-	/**
-	 * @brief Reports whether the underlying WebSocket server is currently running.
-	 * @return true when the runtime server exists and is running; otherwise false.
-	 */
+
+ /**
+ * @brief Reports whether the server instance is accepting connections.
+ * @return The result of the requested operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * IsRunning();
+ * @endcode
+ */
 	UFUNCTION(BlueprintPure, Category = "NativeWebWebSocket")
 	bool IsRunning() const;
 
-	/** @brief Returns the payload format applied to outgoing and incoming WebSocket messages. @return Current payload format. */
+	/** @brief Returns the payload format applied to outgoing and incoming WebSocket messages. @return Current payload format.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * GetPayloadFormat();
+ * @endcode
+ */
 	UFUNCTION(BlueprintPure, Category = "NativeWebWebSocket|Pipeline")
 	ENativeWebWebSocketPayloadFormat GetPayloadFormat() const { return PayloadFormat; }
 
-	/**
-	 * @brief Sends a UTF-8 string message to one connected client.
-	 * @param InClientId Identifier of the destination client.
-	 * @param InMessage Message text to send.
-	 * @return The send result, including invalid-client, disconnected, queue, and transport failures.
-	 */
+
+ /**
+ * @brief Queues a string payload for one connected client using the configured WebSocket payload format.
+ * @param InClientId Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InMessage Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @return The result of the requested operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * SendToClientString(InClientId, InMessage);
+ * @endcode
+ */
 	UFUNCTION(BlueprintCallable, Category = "NativeWebWebSocket")
 	ENativeWebWebSocketSendResult SendToClientString(int64 InClientId, const FString& InMessage);
 
-	/**
-	 * @brief Sends binary data to one connected client.
-	 * @param InClientId Identifier of the destination client.
-	 * @param InBytes Payload bytes to send.
-	 * @return The send result. The payload may still be transformed by the configured packet codec or pipeline.
-	 */
+
+ /**
+ * @brief Queues opaque bytes for one connected client; the payload is copied before asynchronous network sending.
+ * @param InClientId Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InBytes Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @return The result of the requested operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * SendToClientBytes(InClientId, InBytes);
+ * @endcode
+ */
 	UFUNCTION(BlueprintCallable, Category = "NativeWebWebSocket")
 	ENativeWebWebSocketSendResult SendToClientBytes(int64 InClientId, const TArray<uint8>& InBytes);
 
-	/**
-	 * @brief Serializes and sends a JSON object or value to one connected client.
-	 * @param InClientId Identifier of the destination client.
-	 * @param InJsonObject Object to serialize. May be null when InJsonValue is supplied.
-	 * @param InJsonValue Value to serialize when InJsonObject is null.
-	 * @return SerializeFailed when neither input is valid or serialization fails; otherwise the underlying send result.
-	 */
+
+ /**
+ * @brief Serializes the supplied JSON value with the configured codec and queues it for one connected client.
+ * @param InClientId Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InJsonObject Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InJsonValue Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @return The result of the requested operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * SendToClientJson(InClientId, InJsonObject, InJsonValue);
+ * @endcode
+ */
 	ENativeWebWebSocketSendResult SendToClientJson(int64 InClientId, const TSharedPtr<FJsonObject>& InJsonObject, const TSharedPtr<FJsonValue>& InJsonValue = nullptr);
 
-	/**
-	 * @brief Sends a UTF-8 string message to every connected client.
-	 * @param InMessage Message text to broadcast.
-	 * @return The aggregate broadcast send result, or InvalidServer when the server is not running.
-	 */
+
+ /**
+ * @brief Queues a string payload for every connected client.
+ * @param InMessage Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @return The result of the requested operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * BroadcastString(InMessage);
+ * @endcode
+ */
 	UFUNCTION(BlueprintCallable, Category = "NativeWebWebSocket")
 	ENativeWebWebSocketSendResult BroadcastString(const FString& InMessage);
 
-	/**
-	 * @brief Sends binary data to every connected client.
-	 * @param InBytes Payload bytes to broadcast.
-	 * @return The aggregate broadcast send result, or InvalidServer when the server is not running.
-	 */
+
+ /**
+ * @brief Queues opaque bytes for every connected client.
+ * @param InBytes Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @return The result of the requested operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * BroadcastBytes(InBytes);
+ * @endcode
+ */
 	UFUNCTION(BlueprintCallable, Category = "NativeWebWebSocket")
 	ENativeWebWebSocketSendResult BroadcastBytes(const TArray<uint8>& InBytes);
 
-	/**
-	 * @brief Serializes and broadcasts a JSON object or value to every connected client.
-	 * @param InJsonObject Object to serialize. May be null when InJsonValue is supplied.
-	 * @param InJsonValue Value to serialize when InJsonObject is null.
-	 * @return SerializeFailed when neither input is valid or serialization fails; otherwise the underlying broadcast result.
-	 */
+
+ /**
+ * @brief Serializes the supplied JSON value and queues it for every connected client.
+ * @param InJsonObject Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InJsonValue Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @return The result of the requested operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * BroadcastJson(InJsonObject, InJsonValue);
+ * @endcode
+ */
 	ENativeWebWebSocketSendResult BroadcastJson(const TSharedPtr<FJsonObject>& InJsonObject, const TSharedPtr<FJsonValue>& InJsonValue = nullptr);
 
-	/**
-	 * @brief Sends a UTF-8 string message to every connected client except one.
-	 * @param InExcludedClientId Client identifier excluded from delivery.
-	 * @param InMessage Message text to broadcast.
-	 * @return The broadcast send result, or InvalidServer when the server is not running.
-	 */
+
+ /**
+ * @brief Queues a string payload for every connected client except the specified client.
+ * @param InExcludedClientId Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InMessage Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @return The result of the requested operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * BroadcastStringExcept(InExcludedClientId, InMessage);
+ * @endcode
+ */
 	UFUNCTION(BlueprintCallable, Category = "NativeWebWebSocket")
 	ENativeWebWebSocketSendResult BroadcastStringExcept(int64 InExcludedClientId, const FString& InMessage);
 
-	/**
-	 * @brief Sends binary data to every connected client except one.
-	 * @param InExcludedClientId Client identifier excluded from delivery.
-	 * @param InBytes Payload bytes to broadcast.
-	 * @return The broadcast send result, or InvalidServer when the server is not running.
-	 */
+
+ /**
+ * @brief Queues opaque bytes for every connected client except the specified client.
+ * @param InExcludedClientId Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InBytes Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @return The result of the requested operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * BroadcastBytesExcept(InExcludedClientId, InBytes);
+ * @endcode
+ */
 	UFUNCTION(BlueprintCallable, Category = "NativeWebWebSocket")
 	ENativeWebWebSocketSendResult BroadcastBytesExcept(int64 InExcludedClientId, const TArray<uint8>& InBytes);
 
-	/**
-	 * @brief Disconnects a connected client and reports the requested close reason.
-	 * @param InClientId Identifier of the client to disconnect.
-	 * @param InReason Close reason sent to the client and used by the server runtime.
-	 * @return Ok when the disconnect was queued; otherwise the relevant server, client, or transport failure.
-	 */
+
+ /**
+ * @brief Requests closure of one connected client with the supplied close reason.
+ * @param InClientId Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InReason Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @return The result of the requested operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * DisconnectClient(InClientId, InReason);
+ * @endcode
+ */
 	UFUNCTION(BlueprintCallable, Category = "NativeWebWebSocket")
 	ENativeWebWebSocketSendResult DisconnectClient(int64 InClientId, ENativeWebWebSocketCloseReason InReason = ENativeWebWebSocketCloseReason::Kicked);
 
-	/**
-	 * @brief Stops the underlying server if it is running.
-	 * @note This is safe to call when the server is already stopped.
-	 */
+
+ /**
+ * @brief Stops the server and drains worker activity before releasing its runtime instance.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * StopServer();
+ * @endcode
+ * @warning This call releases or replaces owned state; ensure dependent work has stopped before teardown.
+ */
 	UFUNCTION(BlueprintCallable, Category = "NativeWebWebSocket")
 	void StopServer();
 
-	/**
-	 * @brief Returns the currently known client objects.
-	 * @return A snapshot array of connected or still-being-cleaned-up client objects. The caller does not own the objects.
-	 */
+
+ /**
+ * @brief Returns the clients currently owned by this server.
+ * @return The result of the requested operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * GetClients();
+ * @endcode
+ */
 	UFUNCTION(BlueprintPure, Category = "NativeWebWebSocket")
 	TArray<UNativeWebWebSocketClientBase*> GetClients() const;
 
-	/**
-	 * @brief Looks up a client by identifier.
-	 * @param InClientId Identifier returned by the client object and connection event.
-	 * @return The matching client object, or nullptr when no client is registered with that identifier.
-	 */
+
+ /**
+ * @brief Looks up one connected client by its assigned identifier.
+ * @param InClientId Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @return The result of the requested operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * GetClient(InClientId);
+ * @endcode
+ */
 	UFUNCTION(BlueprintPure, Category = "NativeWebWebSocket")
 	UNativeWebWebSocketClientBase* GetClient(int64 InClientId) const;
 
-	/**
-	 * @brief Returns runtime connection and traffic statistics for this server.
-	 * @return A value snapshot of the server statistics.
-	 */
+
+ /**
+ * @brief Returns a snapshot of server counters and queue state.
+ * @return The result of the requested operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * GetStats();
+ * @endcode
+ */
 	UFUNCTION(BlueprintPure, Category = "NativeWebWebSocket")
 	FNativeWebWebSocketServerStats GetStats() const;
 
-	/**
-	 * @brief Sets the wire payload format used by the server pipeline.
-	 * @param InPayloadFormat New payload format.
-	 * @note The setting is forwarded to the active runtime server and affects subsequent messages.
-	 */
+
+ /**
+ * @brief Selects the built-in payload format for future send and receive operations.
+ * @param InPayloadFormat Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * SetPayloadFormat(InPayloadFormat);
+ * @endcode
+ */
 	UFUNCTION(BlueprintCallable, Category = "NativeWebWebSocket|Pipeline")
 	void SetPayloadFormat(ENativeWebWebSocketPayloadFormat InPayloadFormat);
 
-	/**
-	 * @brief Replaces the server pipeline configuration.
-	 * @param InPipelineConfig Configuration controlling processing stages for WebSocket payloads.
-	 * @note The configuration is applied to the active runtime server when one exists and is also retained for the next start.
-	 */
+
+ /**
+ * @brief Replaces the configuration used to build the message codec pipeline.
+ * @param InPipelineConfig Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * SetPipelineConfig(InPipelineConfig);
+ * @endcode
+ */
 	UFUNCTION(BlueprintCallable, Category = "NativeWebWebSocket|Pipeline")
 	void SetPipelineConfig(const FNativeWebWebSocketPipelineConfig& InPipelineConfig);
 
-	/**
-	 * @brief Sets the optional packet codec used to transform WebSocket payloads.
-	 * @param InCodec Codec shared by the server runtime. Passing an invalid pointer disables the codec.
-	 * @note The codec is retained by shared ownership and is applied to subsequent server traffic.
-	 */
+
+ /**
+ * @brief Installs a custom packet codec for the server pipeline.
+ * @param InCodec Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * SetPacketCodec(InCodec);
+ * @endcode
+ */
 	void SetPacketCodec(const TSharedPtr<INativeWebWebSocketPacketCodec>& InCodec);
 
 protected:
@@ -229,7 +392,13 @@ protected:
 	 * @param InData Decoded binary payload.
 	 * @note Override this to implement application-level binary message handling. The base implementation is a no-op.
 	 * @note Called only on the game thread.
-	 */
+ * @details This entry point is part of the owning type/module contract. It uses the declared input and output parameters; consult the owning type documentation for lifecycle, ownership, threading, and failure context.
+ * @par Example
+ * The following call shape illustrates the invocation context; supply valid values and an owner appropriate to the documented lifecycle.
+ * @code{.cpp}
+HandleClientBytes(InClient, InData);
+@endcode
+ */
 	virtual void HandleClientBytes(UNativeWebWebSocketClientBase* InClient, const TArray<uint8>& InData);
 	/**
 	 * @brief Handles a text message delivered by the server runtime.
@@ -237,7 +406,13 @@ protected:
 	 * @param InMessage Decoded text payload.
 	 * @note Override this to implement application-level text message handling. The base implementation is a no-op.
 	 * @note Called only on the game thread.
-	 */
+ * @details This entry point is part of the owning type/module contract. It uses the declared input and output parameters; consult the owning type documentation for lifecycle, ownership, threading, and failure context.
+ * @par Example
+ * The following call shape illustrates the invocation context; supply valid values and an owner appropriate to the documented lifecycle.
+ * @code{.cpp}
+HandleClientString(InClient, InMessage);
+@endcode
+ */
 	virtual void HandleClientString(UNativeWebWebSocketClientBase* InClient, const FString& InMessage);
 	
 	/**
@@ -245,7 +420,13 @@ protected:
 	 * @param InNativeWebWebSocketSubsystem WebSocket subsystem that owns the initialized runtime.
 	 * @note This is called by the subsystem before normal client traffic is processed. The base implementation is a no-op.
 	 * @note Called only on the game thread.
-	 */
+ * @details This entry point is part of the owning type/module contract. It uses the declared input and output parameters; consult the owning type documentation for lifecycle, ownership, threading, and failure context.
+ * @par Example
+ * The following call shape illustrates the invocation context; supply valid values and an owner appropriate to the documented lifecycle.
+ * @code{.cpp}
+ServerInitialized(InNativeWebWebSocketSubsystem);
+@endcode
+ */
 	virtual void ServerInitialized(UNativeWebWebSocketSubsystem* InNativeWebWebSocketSubsystem);
 #pragma endregion
 
@@ -259,53 +440,98 @@ protected:
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FNativeWebWebSocketGameThreadEventTestAccess;
 #endif
-	/**
-	 * @brief Starts the internal server runtime with the supplied configuration.
-	 * @param InNameId Stable identifier used to identify this server.
-	 * @param InBoundPort Requested local TCP port.
-	 * @param InClientClass UObject class used to create client instances.
-	 * @param InPipelineConfig Payload pipeline configuration.
-	 * @return true when startup succeeds; otherwise false and the runtime reports the startup error.
-	 * @note This is an internal entry point. Callers should normally use the WebSocket subsystem rather than invoking it directly.
-	 */
+
+ /**
+ * @brief Implements StartServerInternal for this module.
+ * @param InNameId Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InBoundPort Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InClientClass Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InPipelineConfig Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @return The result of the requested operation.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * StartServerInternal(InNameId, InBoundPort, InClientClass, InPipelineConfig);
+ * @endcode
+ */
 	bool StartServerInternal(FName InNameId, int32 InBoundPort, TSubclassOf<UNativeWebWebSocketClientBase> InClientClass,
 	                         const FNativeWebWebSocketPipelineConfig& InPipelineConfig);
-	/**
-	 * @brief Attaches an already-created runtime server instance to this UObject.
-	 * @param InInstance Runtime instance to associate with this server.
-	 * @note This transfers the shared reference and is intended for internal subsystem coordination.
-	 */
+
+ /**
+ * @brief Implements AttachInstance for this module.
+ * @param InInstance Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * AttachInstance(InInstance);
+ * @endcode
+ */
 	void AttachInstance(const TSharedPtr<FNativeWebWebSocketServerInstance>& InInstance);
-	/**
-	 * @brief Updates server state and emits OnClientConnected for a newly connected client.
-	 * @param InClientInfo Identity and connection metadata for the client.
-	 */
+
+ /**
+ * @brief Implements NotifyClientConnected for this module.
+ * @param InClientInfo Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * NotifyClientConnected(InClientInfo);
+ * @endcode
+ */
 	void NotifyClientConnected(const FNativeWebWebSocketClientInfo& InClientInfo);
-	/**
-	 * @brief Updates server state and emits OnClientDisconnected for a disconnected client.
-	 * @param InClientId Identifier of the disconnected client.
-	 * @param InReason Reason reported for the disconnection.
-	 */
+
+ /**
+ * @brief Implements NotifyClientDisconnected for this module.
+ * @param InClientId Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InReason Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * NotifyClientDisconnected(InClientId, InReason);
+ * @endcode
+ */
 	void NotifyClientDisconnected(int64 InClientId, ENativeWebWebSocketCloseReason InReason);
-	/**
-	 * @brief Emits OnServerError for an error reported by the runtime server.
-	 * @param InErrorCode Runtime error code.
-	 * @param InMessage Human-readable error description.
-	 */
+
+ /**
+ * @brief Implements NotifyServerError for this module.
+ * @param InErrorCode Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InMessage Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * NotifyServerError(InErrorCode, InMessage);
+ * @endcode
+ */
 	void NotifyServerError(ENativeWebWebSocketErrorCode InErrorCode, const FString& InMessage);
-	/**
-	 * @brief Emits OnClientError for an error associated with a client.
-	 * @param InClientId Identifier of the affected client.
-	 * @param InErrorCode Runtime error code.
-	 * @param InMessage Human-readable error description.
-	 */
+
+ /**
+ * @brief Implements NotifyClientError for this module.
+ * @param InClientId Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InErrorCode Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InMessage Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * NotifyClientError(InClientId, InErrorCode, InMessage);
+ * @endcode
+ */
 	void NotifyClientError(int64 InClientId, ENativeWebWebSocketErrorCode InErrorCode, const FString& InMessage);
-	/**
-	 * @brief Routes a runtime client message to the appropriate text or binary handler.
-	 * @param InClientId Identifier of the sending client.
-	 * @param InPayload Message bytes, regardless of the original wire representation.
-	 * @param bInBinary true for binary data; false for text data encoded as bytes.
-	 */
+
+ /**
+ * @brief Implements NotifyClientMessage for this module.
+ * @param InClientId Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param InPayload Input used by this operation; see the function declaration and owning type for its exact contract.
+ * @param bInBinary Boolean option controlling this operation.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * NotifyClientMessage(InClientId, InPayload, bInBinary);
+ * @endcode
+ */
 	void NotifyClientMessage(int64 InClientId, const TArray<uint8>& InPayload, bool bInBinary);
 	
 	/**
@@ -313,7 +539,13 @@ protected:
 	 * @param InClientInfo Identity and connection metadata for the client.
 	 * @note The base implementation does nothing. Override to add server-specific connection handling.
 	 * @note Called only on the game thread.
-	 */
+ * @details This entry point is part of the owning type/module contract. It uses the declared input and output parameters; consult the owning type documentation for lifecycle, ownership, threading, and failure context.
+ * @par Example
+ * The following call shape illustrates the invocation context; supply valid values and an owner appropriate to the documented lifecycle.
+ * @code{.cpp}
+HandleClientConnected(InClientInfo);
+@endcode
+ */
 	virtual void HandleClientConnected(const FNativeWebWebSocketClientInfo& InClientInfo);
 	/**
 	 * @brief Receives a client disconnection notification after base bookkeeping.
@@ -321,7 +553,13 @@ protected:
 	 * @param InReason Reason reported for the disconnection.
 	 * @note The base implementation does nothing. Override to add server-specific cleanup.
 	 * @note Called only on the game thread.
-	 */
+ * @details This entry point is part of the owning type/module contract. It uses the declared input and output parameters; consult the owning type documentation for lifecycle, ownership, threading, and failure context.
+ * @par Example
+ * The following call shape illustrates the invocation context; supply valid values and an owner appropriate to the documented lifecycle.
+ * @code{.cpp}
+HandleClientDisconnected(InClientId, InReason);
+@endcode
+ */
 	virtual void HandleClientDisconnected(int64 InClientId, ENativeWebWebSocketCloseReason InReason);
 	/**
 	 * @brief Receives a server-level runtime error after the error delegate is notified.
@@ -329,7 +567,13 @@ protected:
 	 * @param InMessage Human-readable error description.
 	 * @note The base implementation does nothing. Override to add application logging or recovery.
 	 * @note Called only on the game thread.
-	 */
+ * @details This entry point is part of the owning type/module contract. It uses the declared input and output parameters; consult the owning type documentation for lifecycle, ownership, threading, and failure context.
+ * @par Example
+ * The following call shape illustrates the invocation context; supply valid values and an owner appropriate to the documented lifecycle.
+ * @code{.cpp}
+HandleServerError(InErrorCode, InMessage);
+@endcode
+ */
 	virtual void HandleServerError(ENativeWebWebSocketErrorCode InErrorCode, const FString& InMessage);
 	/**
 	 * @brief Receives a client-specific runtime error after the error delegate is notified.
@@ -338,7 +582,13 @@ protected:
 	 * @param InMessage Human-readable error description.
 	 * @note The base implementation does nothing. Override to add application logging or recovery.
 	 * @note Called only on the game thread.
-	 */
+ * @details This entry point is part of the owning type/module contract. It uses the declared input and output parameters; consult the owning type documentation for lifecycle, ownership, threading, and failure context.
+ * @par Example
+ * The following call shape illustrates the invocation context; supply valid values and an owner appropriate to the documented lifecycle.
+ * @code{.cpp}
+HandleClientError(InClientId, InErrorCode, InMessage);
+@endcode
+ */
 	virtual void HandleClientError(int64 InClientId, ENativeWebWebSocketErrorCode InErrorCode, const FString& InMessage);
 	/**
 	 * @brief Receives a client message after the runtime has identified its wire type.
@@ -347,33 +597,128 @@ protected:
 	 * @param bInBinary true for binary data; false for text data.
 	 * @note The base implementation does nothing. Override to implement application protocol handling.
 	 * @note Called only on the game thread.
-	 */
+ * @details This entry point is part of the owning type/module contract. It uses the declared input and output parameters; consult the owning type documentation for lifecycle, ownership, threading, and failure context.
+ * @par Example
+ * The following call shape illustrates the invocation context; supply valid values and an owner appropriate to the documented lifecycle.
+ * @code{.cpp}
+HandleClientMessage(InClientId, InPayload, bInBinary);
+@endcode
+ */
 	virtual void HandleClientMessage(int64 InClientId, const TArray<uint8>& InPayload, bool bInBinary);
 #pragma endregion
 
 private:
 #pragma region InternalState
-	/** @brief Enqueues an owned event from a producer thread. */
+	/** @brief Enqueues an owned event from a producer thread.
+* @param InEvent Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+ * @return True when the operation succeeds or accepts the request; false when it fails or rejects it.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * EnqueueGameThreadEvent(InEvent);
+ * @endcode
+ */
 	bool EnqueueGameThreadEvent(FNativeWebWebSocketGameThreadEvent&& InEvent);
-	/** @brief Drains at most the requested number of events on the game thread. */
+	/** @brief Drains at most the requested number of events on the game thread.
+* @param InMaxEvents Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+ * @return The resulting count, size, index, hash, or numeric value.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * DrainGameThreadEvents(InMaxEvents);
+ * @endcode
+ */
 	int32 DrainGameThreadEvents(int32 InMaxEvents);
-	/** @brief Dispatches one generation-validated event on the game thread. */
+	/** @brief Dispatches one generation-validated event on the game thread.
+* @param InEvent Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * DispatchGameThreadEvent(InEvent);
+ * @endcode
+ */
 	void DispatchGameThreadEvent(FNativeWebWebSocketGameThreadEvent&& InEvent);
-	/** @brief Applies a client-connected event and flushes messages buffered before connection. */
+	/** @brief Applies a client-connected event and flushes messages buffered before connection.
+* @param InEvent Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * DispatchClientConnectedEvent(InEvent);
+ * @endcode
+ */
 	void DispatchClientConnectedEvent(const FNativeWebWebSocketClientConnectedEvent& InEvent);
-	/** @brief Applies a client-disconnected event before broadcasting lifecycle callbacks. */
+	/** @brief Applies a client-disconnected event before broadcasting lifecycle callbacks.
+* @param InEvent Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * DispatchClientDisconnectedEvent(InEvent);
+ * @endcode
+ */
 	void DispatchClientDisconnectedEvent(const FNativeWebWebSocketClientDisconnectedEvent& InEvent);
-	/** @brief Broadcasts a server error and invokes the native server error hook. */
+	/** @brief Broadcasts a server error and invokes the native server error hook.
+* @param InEvent Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * DispatchServerErrorEvent(InEvent);
+ * @endcode
+ */
 	void DispatchServerErrorEvent(const FNativeWebWebSocketServerErrorEvent& InEvent);
-	/** @brief Broadcasts a client error and invokes the native client error hook. */
+	/** @brief Broadcasts a client error and invokes the native client error hook.
+* @param InEvent Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * DispatchClientErrorEvent(InEvent);
+ * @endcode
+ */
 	void DispatchClientErrorEvent(const FNativeWebWebSocketClientErrorEvent& InEvent);
-	/** @brief Routes a client message to the generic, byte, and text handlers. */
+	/** @brief Routes a client message to the generic, byte, and text handlers.
+* @param InEvent Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * DispatchClientMessageEvent(InEvent);
+ * @endcode
+ */
 	void DispatchClientMessageEvent(const FNativeWebWebSocketClientMessageEvent& InEvent);
-	/** @brief Removes all queued events after producer threads have stopped. */
+	/** @brief Removes all queued events after producer threads have stopped.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * ClearGameThreadEvents();
+ * @endcode
+ */
 	void ClearGameThreadEvents();
-	/** @brief Returns the current queued event count. */
+	/** @brief Returns the current queued event count.
+ * @return The resulting count, size, index, hash, or numeric value.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * GetGameThreadEventQueueDepth();
+ * @endcode
+ */
 	int32 GetGameThreadEventQueueDepth() const;
-	/** @brief Consumes a control-event overflow stop request. */
+	/** @brief Consumes a control-event overflow stop request.
+ * @return True when the operation succeeds or accepts the request; false when it fails or rejects it.
+ * @note Network stages run on worker threads; UObject events are marshalled to the game thread.
+ * @par Example
+ * Invocation example; substitute arguments that satisfy the function contract.
+ * @code{.cpp}
+ * ConsumeControlEventOverflowStopRequest();
+ * @endcode
+ */
 	bool ConsumeControlEventOverflowStopRequest();
 
 	/** @brief NameId state. */
@@ -392,6 +737,7 @@ private:
 	mutable FCriticalSection ClientObjectsLock;
 	/** @brief ClientObjects state. */
 	UPROPERTY()
+	/** @brief Reflected data field `ClientObjects`. */
 	TMap<int64, TObjectPtr<UNativeWebWebSocketClientBase>> ClientObjects;
 	/** @brief Messages received before their game-thread client object was created. */
 	TMap<int64, TArray<FNativeWebWebSocketInboundPacket>> PendingClientMessages;

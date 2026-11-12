@@ -1,3 +1,5 @@
+
+
 #include "Subsystems/NativeWebLocalPlayerSubsystem.h"
 
 #include "Misc/FileHelper.h"
@@ -7,6 +9,8 @@
 
 namespace
 {
+
+
 	bool ResolveProjectContentDirectory(const FString& RelativeDirectory, FString& OutDirectory)
 	{
 		if (RelativeDirectory.IsEmpty() || !FPaths::IsRelative(RelativeDirectory)) return false;

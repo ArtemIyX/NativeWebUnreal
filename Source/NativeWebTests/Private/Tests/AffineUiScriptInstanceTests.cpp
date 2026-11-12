@@ -1,3 +1,5 @@
+
+
 #if WITH_DEV_AUTOMATION_TESTS && PLATFORM_WINDOWS
 
 #include "AffineUiScriptInstance.h"
@@ -9,6 +11,8 @@
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAffineUiScriptInstanceBridgeTest,
                                  "NativeWeb.AffineUi.QuickJS.BridgeLifecycleAndTextUpdates",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+
 
 bool FAffineUiScriptInstanceBridgeTest::RunTest(const FString& Parameters)
 {
@@ -70,6 +74,8 @@ bool FAffineUiScriptInstanceBridgeTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAffineUiMessageBridgeTest,
                                  "NativeWeb.AffineUi.QuickJS.TwoWayMessagingAndBounds",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+
 
 bool FAffineUiMessageBridgeTest::RunTest(const FString& Parameters)
 {
@@ -181,6 +187,8 @@ bool FAffineUiMessageBridgeTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAffineUiVueBundleTest,
                                  "NativeWeb.AffineUi.QuickJS.VueAppBundle",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+
 
 bool FAffineUiVueBundleTest::RunTest(const FString& Parameters)
 {

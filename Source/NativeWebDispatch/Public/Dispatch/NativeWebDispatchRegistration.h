@@ -8,7 +8,7 @@
 #include "CoreMinimal.h"
 #include "Dispatch/NativeWebDispatchRegistry.h"
 
-/** @brief Type declaration. */
+/** @brief the nativewebdispatch api type and its operations. */
 class NATIVEWEBDISPATCH_API FNativeWebDispatchFactoryRegistrar
 {
 public:

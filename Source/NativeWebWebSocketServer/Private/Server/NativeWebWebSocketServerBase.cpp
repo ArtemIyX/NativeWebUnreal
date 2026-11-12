@@ -1,4 +1,6 @@
-﻿#include "Server/NativeWebWebSocketServerBase.h"
+﻿
+
+#include "Server/NativeWebWebSocketServerBase.h"
 
 #include "Config/NativeWebWebSocketCVars.h"
 #include "Data/NativeWebWebSocketStructs.h"
@@ -214,6 +216,8 @@ void UNativeWebWebSocketServerBase::StopServer()
 		Instance->Stop();
 	}
 	ClearGameThreadEvents();
+
+
 	FScopeLock lock(&ClientObjectsLock);
 	ClientObjects.Empty();
 	PendingClientMessages.Empty();
@@ -222,6 +226,8 @@ void UNativeWebWebSocketServerBase::StopServer()
 TArray<UNativeWebWebSocketClientBase*> UNativeWebWebSocketServerBase::GetClients() const
 {
 	TArray<UNativeWebWebSocketClientBase*> outClients;
+
+
 	FScopeLock lock(&ClientObjectsLock);
 	for (const TPair<int64, TObjectPtr<UNativeWebWebSocketClientBase>>& Pair : ClientObjects)
 	{
@@ -235,6 +241,8 @@ TArray<UNativeWebWebSocketClientBase*> UNativeWebWebSocketServerBase::GetClients
 
 UNativeWebWebSocketClientBase* UNativeWebWebSocketServerBase::GetClient(int64 InClientId) const
 {
+
+
 	FScopeLock lock(&ClientObjectsLock);
 	if (const TObjectPtr<UNativeWebWebSocketClientBase>* Found = ClientObjects.Find(InClientId))
 	{
@@ -482,6 +490,8 @@ void UNativeWebWebSocketServerBase::DispatchClientConnectedEvent(const FNativeWe
 	check(IsInGameThread());
 	const FNativeWebWebSocketClientInfo& clientInfo = InEvent.ClientInfo;
 	{
+
+
 		FScopeLock lock(&ClientObjectsLock);
 		PendingClientMessages.FindOrAdd(clientInfo.ClientId);
 	}
@@ -491,6 +501,8 @@ void UNativeWebWebSocketServerBase::DispatchClientConnectedEvent(const FNativeWe
 	if (!IsValid(clientObject))
 	{
 		{
+
+
 			FScopeLock lock(&ClientObjectsLock);
 			PendingClientMessages.Remove(clientInfo.ClientId);
 		}
@@ -502,6 +514,8 @@ void UNativeWebWebSocketServerBase::DispatchClientConnectedEvent(const FNativeWe
 	TArray<FNativeWebWebSocketInboundPacket> pendingMessages;
 	clientObject->InitializeClient(this, clientInfo);
 	{
+
+
 		FScopeLock lock(&ClientObjectsLock);
 		ClientObjects.Add(clientInfo.ClientId, clientObject);
 		if (TArray<FNativeWebWebSocketInboundPacket>* foundPendingMessages = PendingClientMessages.Find(clientInfo.ClientId))
@@ -526,6 +540,8 @@ void UNativeWebWebSocketServerBase::DispatchClientDisconnectedEvent(const FNativ
 {
 	check(IsInGameThread());
 	{
+
+
 		FScopeLock lock(&ClientObjectsLock);
 		PendingClientMessages.Remove(InEvent.ClientId);
 		ClientObjects.Remove(InEvent.ClientId);
@@ -557,6 +573,8 @@ void UNativeWebWebSocketServerBase::DispatchClientMessageEvent(const FNativeWebW
 	check(IsInGameThread());
 	UNativeWebWebSocketClientBase* client = nullptr;
 	{
+
+
 		FScopeLock lock(&ClientObjectsLock);
 		if (const TObjectPtr<UNativeWebWebSocketClientBase>* found = ClientObjects.Find(InEvent.ClientId))
 		{
@@ -588,7 +606,11 @@ void UNativeWebWebSocketServerBase::DispatchClientMessageEvent(const FNativeWebW
 
 	if (!InEvent.bBinary)
 	{
+
+
 		FUTF8ToTCHAR converter(reinterpret_cast<const ANSICHAR*>(InEvent.Payload.GetData()), InEvent.Payload.Num());
+
+
 		const FString text(converter.Length(), converter.Get());
 		check(IsInGameThread());
 		client->HandleStringFromClient(text);

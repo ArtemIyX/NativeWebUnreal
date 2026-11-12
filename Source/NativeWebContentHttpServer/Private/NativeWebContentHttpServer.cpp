@@ -1,7 +1,4 @@
-/**
- * @file NativeWebContentHttpServer/Private/NativeWebContentHttpServer.cpp
- * @brief Module lifecycle and service creation/destruction.
- */
+
 #include "NativeWebContentHttpServer.h"
 
 #include "Services/NativeWebContentImageCacheService.h"

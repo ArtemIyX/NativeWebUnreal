@@ -1,3 +1,5 @@
+
+
 #include "NativeWebView.h"
 
 #include "AffineUiScriptInstance.h"
@@ -13,36 +15,46 @@
 
 namespace
 {
-FNativeWebError BuildNativeWebError(FName Code, const FString& Message, FName ViewName)
-{
-	FNativeWebError Result;
-	Result.Code = Code;
-	Result.Message = Message;
-	Result.ViewName = ViewName;
-	return Result;
+
+
+	FNativeWebError BuildNativeWebError(FName Code, const FString& Message, FName ViewName)
+	{
+		FNativeWebError Result;
+		Result.Code = Code;
+		Result.Message = Message;
+		Result.ViewName = ViewName;
+		return Result;
+	}
+
+
+
+	int64 GetQueuedMessageByteSize(const FNativeWebMessage& Message)
+	{
+		if (Message.Type == ENativeWebPayloadType::PAYLOAD_BYTES) return Message.Bytes.Num();
+
+
+		const FTCHARToUTF8 Utf8(*Message.String, Message.String.Len());
+		return Utf8.Length();
+	}
+
+
+
+	bool ResolvePackagedPath(const FString& Root, FString Relative, FString& OutPath)
+	{
+		if (Root.IsEmpty() || Relative.IsEmpty() || FPaths::IsRelative(Relative) == false || FCString::Strlen(*Relative)
+			!= Relative.Len()) return false;
+		Relative.ReplaceInline(TEXT("\\"), TEXT("/"));
+		if (Relative.StartsWith(TEXT("/")) || Relative.Contains(TEXT(":"))) return false;
+		TArray<FString> Parts;
+		Relative.ParseIntoArray(Parts, TEXT("/"), true);
+		for (const FString& Part : Parts) if (Part == TEXT("..") || Part == TEXT(".")) return false;
+		OutPath = FPaths::Combine(Root, Relative);
+		return true;
+	}
 }
 
-int64 GetQueuedMessageByteSize(const FNativeWebMessage& Message)
-{
-	if (Message.Type == ENativeWebPayloadType::PAYLOAD_BYTES) return Message.Bytes.Num();
-	const FTCHARToUTF8 Utf8(*Message.String, Message.String.Len());
-	return Utf8.Length();
-}
-
-bool ResolvePackagedPath(const FString& Root, FString Relative, FString& OutPath)
-{
-	if (Root.IsEmpty() || Relative.IsEmpty() || FPaths::IsRelative(Relative) == false || FCString::Strlen(*Relative) != Relative.Len()) return false;
-	Relative.ReplaceInline(TEXT("\\"), TEXT("/"));
-	if (Relative.StartsWith(TEXT("/")) || Relative.Contains(TEXT(":"))) return false;
-	TArray<FString> Parts;
-	Relative.ParseIntoArray(Parts, TEXT("/"), true);
-	for (const FString& Part : Parts) if (Part == TEXT("..") || Part == TEXT(".")) return false;
-	OutPath = FPaths::Combine(Root, Relative);
-	return true;
-}
-}
-
-bool UNativeWebView::Initialize(FName InName, const FNativeWebViewOptions& Options, ULocalPlayer* Player, FNativeWebError& OutError)
+bool UNativeWebView::Initialize(FName InName, const FNativeWebViewOptions& Options, ULocalPlayer* Player,
+                                FNativeWebError& OutError)
 {
 	check(IsInGameThread());
 	UE_LOG(LogNativeWebView, Log, TEXT("Initializing view '%s' (size=%dx%d, dpi=%.2f)."),
@@ -52,7 +64,8 @@ bool UNativeWebView::Initialize(FName InName, const FNativeWebViewOptions& Optio
 	PackagedAssetRoot = Options.PackagedAssetRoot;
 #if !PLATFORM_WINDOWS
 	OutError = BuildNativeWebError(TEXT("UnsupportedPlatform"), TEXT("NativeWeb views require Win64 D3D11."), ViewName);
-	UE_LOG(LogNativeWebView, Error, TEXT("View '%s' initialization rejected: %s"), *ViewName.ToString(), *OutError.Message);
+	UE_LOG(LogNativeWebView, Error, TEXT("View '%s' initialization rejected: %s"), *ViewName.ToString(),
+	       *OutError.Message);
 	return false;
 #else
 	FAffineUiSurfaceDesc Desc;
@@ -67,9 +80,13 @@ bool UNativeWebView::Initialize(FName InName, const FNativeWebViewOptions& Optio
 	Script = FAffineUiScriptInstance::Create(Desc, ErrorMessage);
 	if (!Script)
 	{
-		const FName ErrorCode = ErrorMessage.Contains(TEXT("Only one AffineUI surface")) ? FName(TEXT("RendererCapacityUnavailable")) :
-			(ErrorMessage.Contains(TEXT("D3D11")) || ErrorMessage.Contains(TEXT("Win64"))) ? FName(TEXT("UnsupportedRhi")) :
-			ErrorMessage.Contains(TEXT("Invalid surface")) ? FName(TEXT("InvalidOptions")) : FName(TEXT("RuntimeUnavailable"));
+		const FName ErrorCode = ErrorMessage.Contains(TEXT("Only one AffineUI surface"))
+			                        ? FName(TEXT("RendererCapacityUnavailable"))
+			                        : (ErrorMessage.Contains(TEXT("D3D11")) || ErrorMessage.Contains(TEXT("Win64")))
+			                        ? FName(TEXT("UnsupportedRhi"))
+			                        : ErrorMessage.Contains(TEXT("Invalid surface"))
+			                        ? FName(TEXT("InvalidOptions"))
+			                        : FName(TEXT("RuntimeUnavailable"));
 		OutError = BuildNativeWebError(ErrorCode, ErrorMessage, ViewName);
 		UE_LOG(LogNativeWebView, Error, TEXT("View '%s' runtime creation failed (code=%s): %s"),
 		       *ViewName.ToString(), *ErrorCode.ToString(), *ErrorMessage);
@@ -77,16 +94,19 @@ bool UNativeWebView::Initialize(FName InName, const FNativeWebViewOptions& Optio
 	}
 	Surface = Script->GetSurface();
 	const uint64 ThisGeneration = Generation;
+
+
 	TWeakObjectPtr<UNativeWebView> WeakThis(this);
-	Surface->SetOnTextureReady(FAffineUiTextureReady::CreateLambda([WeakThis, ThisGeneration](UTextureRenderTarget2D* Texture)
-	{
-		if (UNativeWebView* View = WeakThis.Get(); View && !View->bClosed && View->Generation == ThisGeneration)
+	Surface->SetOnTextureReady(FAffineUiTextureReady::CreateLambda(
+		[WeakThis, ThisGeneration](UTextureRenderTarget2D* Texture)
 		{
-			UE_LOG(LogNativeWebViewport, VeryVerbose, TEXT("View '%s' published output texture %s."),
-			       *View->ViewName.ToString(), Texture ? *Texture->GetName() : TEXT("<null>"));
-			View->SetOutputTexture(Texture);
-		}
-	}));
+			if (UNativeWebView* View = WeakThis.Get(); View && !View->bClosed && View->Generation == ThisGeneration)
+			{
+				UE_LOG(LogNativeWebViewport, VeryVerbose, TEXT("View '%s' published output texture %s."),
+				       *View->ViewName.ToString(), Texture ? *Texture->GetName() : TEXT("<null>"));
+				View->SetOutputTexture(Texture);
+			}
+		}));
 	Surface->SetOnError(FAffineUiSurfaceError::CreateLambda([WeakThis, ThisGeneration](const FString& Message)
 	{
 		if (UNativeWebView* View = WeakThis.Get(); View && !View->bClosed && View->Generation == ThisGeneration)
@@ -115,6 +135,8 @@ bool UNativeWebView::Initialize(FName InName, const FNativeWebViewOptions& Optio
 	}));
 #endif
 	{
+
+
 		FScopeLock Lock(&ProducerMutex);
 		bInitialized = true;
 	}
@@ -198,7 +220,8 @@ void UNativeWebView::DetachFromPlayerViewport()
 	UE_LOG(LogNativeWebViewport, Log, TEXT("Detaching view '%s' from local-player viewport."), *ViewName.ToString());
 	Attachment->SetVisible(false);
 	if (ULocalPlayer* Player = OwningPlayer.Get())
-		if (UGameViewportClient* Viewport = Player->ViewportClient) Viewport->RemoveViewportWidgetContent(Attachment.ToSharedRef());
+		if (UGameViewportClient* Viewport = Player->ViewportClient) Viewport->RemoveViewportWidgetContent(
+			Attachment.ToSharedRef());
 	Attachment.Reset();
 }
 
@@ -223,14 +246,22 @@ bool UNativeWebView::ForwardInput(const FNativeWebInputEvent& Event)
 	FAffineUiInput Input{};
 	switch (Event.Type)
 	{
-	case ENativeWebInputType::INPUT_POINTER_MOVE: Input.Kind = EAffineUiInputKind::MouseMove; break;
-	case ENativeWebInputType::INPUT_POINTER_DOWN: Input.Kind = EAffineUiInputKind::MouseDown; break;
-	case ENativeWebInputType::INPUT_POINTER_UP: Input.Kind = EAffineUiInputKind::MouseUp; break;
-	case ENativeWebInputType::INPUT_WHEEL: Input.Kind = EAffineUiInputKind::MouseWheel; break;
-	case ENativeWebInputType::INPUT_KEY_DOWN: Input.Kind = EAffineUiInputKind::KeyDown; break;
-	case ENativeWebInputType::INPUT_KEY_UP: Input.Kind = EAffineUiInputKind::KeyUp; break;
-	case ENativeWebInputType::INPUT_FOCUS_GAINED: Input.Kind = EAffineUiInputKind::FocusGained; break;
-	case ENativeWebInputType::INPUT_FOCUS_LOST: Input.Kind = EAffineUiInputKind::FocusLost; break;
+	case ENativeWebInputType::INPUT_POINTER_MOVE: Input.Kind = EAffineUiInputKind::MouseMove;
+		break;
+	case ENativeWebInputType::INPUT_POINTER_DOWN: Input.Kind = EAffineUiInputKind::MouseDown;
+		break;
+	case ENativeWebInputType::INPUT_POINTER_UP: Input.Kind = EAffineUiInputKind::MouseUp;
+		break;
+	case ENativeWebInputType::INPUT_WHEEL: Input.Kind = EAffineUiInputKind::MouseWheel;
+		break;
+	case ENativeWebInputType::INPUT_KEY_DOWN: Input.Kind = EAffineUiInputKind::KeyDown;
+		break;
+	case ENativeWebInputType::INPUT_KEY_UP: Input.Kind = EAffineUiInputKind::KeyUp;
+		break;
+	case ENativeWebInputType::INPUT_FOCUS_GAINED: Input.Kind = EAffineUiInputKind::FocusGained;
+		break;
+	case ENativeWebInputType::INPUT_FOCUS_LOST: Input.Kind = EAffineUiInputKind::FocusLost;
+		break;
 	}
 	Input.Position = Event.NormalizedPosition;
 	Input.WheelDelta = Event.WheelDelta;
@@ -251,7 +282,9 @@ bool UNativeWebView::SetDocument(const FString& Html, const FString& Css, FNativ
 		UE_LOG(LogNativeWebView, Warning, TEXT("Cannot set document on closed view '%s'."), *ViewName.ToString());
 		return false;
 	}
-	FAffineUiContent Content; Content.Html = Html; Content.Css = Css;
+	FAffineUiContent Content;
+	Content.Html = Html;
+	Content.Css = Css;
 	if (!Surface->SetContent(Content))
 	{
 		OutError = BuildNativeWebError(TEXT("InvalidDocument"), TEXT("The document could not be queued."), ViewName);
@@ -274,7 +307,8 @@ bool UNativeWebView::EvaluateScript(const FString& Source, const FString& Source
 	UE_LOG(LogNativeWebScript, VeryVerbose, TEXT("Evaluating script '%s' in view '%s' (%d chars)."),
 	       *SourceName, *ViewName.ToString(), Source.Len());
 #if !PLATFORM_WINDOWS
-	OutError = BuildNativeWebError(TEXT("UnsupportedPlatform"), TEXT("NativeWeb JavaScript requires Win64 D3D11."), ViewName);
+	OutError = BuildNativeWebError(TEXT("UnsupportedPlatform"), TEXT("NativeWeb JavaScript requires Win64 D3D11."),
+	                               ViewName);
 	UE_LOG(LogNativeWebScript, Error, TEXT("Script evaluation rejected for view '%s': %s"),
 	       *ViewName.ToString(), *OutError.Message);
 	return false;
@@ -337,13 +371,17 @@ bool UNativeWebView::EvaluateScriptFile(const FString& ScriptPath, FNativeWebErr
 	return EvaluateScript(Source, ScriptPath, OutError);
 }
 
-bool UNativeWebView::LoadPackagedDocument(const FString& HtmlRelativePath, const FString& CssRelativePath, FNativeWebError& OutError)
+bool UNativeWebView::LoadPackagedDocument(const FString& HtmlRelativePath, const FString& CssRelativePath,
+                                          FNativeWebError& OutError)
 {
 	check(IsInGameThread());
 	FString HtmlPath, CssPath;
-	if (!ResolvePackagedPath(PackagedAssetRoot, HtmlRelativePath, HtmlPath) || !ResolvePackagedPath(PackagedAssetRoot, CssRelativePath, CssPath))
+	if (!ResolvePackagedPath(PackagedAssetRoot, HtmlRelativePath, HtmlPath) || !ResolvePackagedPath(
+		PackagedAssetRoot, CssRelativePath, CssPath))
 	{
-		OutError = BuildNativeWebError(TEXT("InvalidAssetPath"), TEXT("Packaged asset paths must be normalized relative paths inside the configured root."), ViewName);
+		OutError = BuildNativeWebError(
+			TEXT("InvalidAssetPath"),
+			TEXT("Packaged asset paths must be normalized relative paths inside the configured root."), ViewName);
 		UE_LOG(LogNativeWebAssets, Error, TEXT("Rejected packaged document paths for view '%s' (html='%s', css='%s')."),
 		       *ViewName.ToString(), *HtmlRelativePath, *CssRelativePath);
 		return false;
@@ -359,7 +397,9 @@ bool UNativeWebView::EvaluatePackagedScript(const FString& ScriptRelativePath, F
 	FString ScriptPath;
 	if (!ResolvePackagedPath(PackagedAssetRoot, ScriptRelativePath, ScriptPath))
 	{
-		OutError = BuildNativeWebError(TEXT("InvalidAssetPath"), TEXT("Packaged script paths must be normalized relative paths inside the configured root."), ViewName);
+		OutError = BuildNativeWebError(
+			TEXT("InvalidAssetPath"),
+			TEXT("Packaged script paths must be normalized relative paths inside the configured root."), ViewName);
 		UE_LOG(LogNativeWebAssets, Error, TEXT("Rejected packaged script path '%s' for view '%s'."),
 		       *ScriptRelativePath, *ViewName.ToString());
 		return false;
@@ -371,7 +411,12 @@ bool UNativeWebView::EvaluatePackagedScript(const FString& ScriptRelativePath, F
 
 ENativeWebQueueResult UNativeWebView::EnqueueStringToJavaScript(FName Channel, FString Value)
 {
-	FNativeWebMessage Message; Message.Type = ENativeWebPayloadType::PAYLOAD_STRING; Message.Channel = Channel; Message.String = MoveTemp(Value);
+	FNativeWebMessage Message;
+	Message.Type = ENativeWebPayloadType::PAYLOAD_STRING;
+	Message.Channel = Channel;
+	Message.String = MoveTemp(Value);
+
+
 	FScopeLock Lock(&ProducerMutex);
 	if (bClosed || !bInitialized)
 	{
@@ -383,11 +428,14 @@ ENativeWebQueueResult UNativeWebView::EnqueueStringToJavaScript(FName Channel, F
 	if (Size > 1024 * 1024 || ProducerMessages.Num() >= 64 || ProducerBytes + Size > 4 * 1024 * 1024)
 	{
 		UE_LOG(LogNativeWebMessaging, Verbose,
-		       TEXT("String message rejected by queue limits for view '%s' (channel='%s', bytes=%lld, count=%d, queuedBytes=%lld)."),
+		       TEXT(
+			       "String message rejected by queue limits for view '%s' (channel='%s', bytes=%lld, count=%d, queuedBytes=%lld)."
+		       ),
 		       *ViewName.ToString(), *Channel.ToString(), Size, ProducerMessages.Num(), ProducerBytes);
 		return ENativeWebQueueResult::RESULT_QUEUE_FULL;
 	}
-	ProducerMessages.Add(MoveTemp(Message)); ProducerBytes += Size;
+	ProducerMessages.Add(MoveTemp(Message));
+	ProducerBytes += Size;
 	UE_LOG(LogNativeWebMessaging, VeryVerbose,
 	       TEXT("String message queued for view '%s' (channel='%s', bytes=%lld, count=%d)."),
 	       *ViewName.ToString(), *Channel.ToString(), Size, ProducerMessages.Num());
@@ -396,7 +444,12 @@ ENativeWebQueueResult UNativeWebView::EnqueueStringToJavaScript(FName Channel, F
 
 ENativeWebQueueResult UNativeWebView::EnqueueBytesToJavaScript(FName Channel, TArray<uint8>&& Value)
 {
-	FNativeWebMessage Message; Message.Type = ENativeWebPayloadType::PAYLOAD_BYTES; Message.Channel = Channel; Message.Bytes = MoveTemp(Value);
+	FNativeWebMessage Message;
+	Message.Type = ENativeWebPayloadType::PAYLOAD_BYTES;
+	Message.Channel = Channel;
+	Message.Bytes = MoveTemp(Value);
+
+
 	FScopeLock Lock(&ProducerMutex);
 	if (bClosed || !bInitialized)
 	{
@@ -408,11 +461,14 @@ ENativeWebQueueResult UNativeWebView::EnqueueBytesToJavaScript(FName Channel, TA
 	if (Size > 1024 * 1024 || ProducerMessages.Num() >= 64 || ProducerBytes + Size > 4 * 1024 * 1024)
 	{
 		UE_LOG(LogNativeWebMessaging, Verbose,
-		       TEXT("Byte message rejected by queue limits for view '%s' (channel='%s', bytes=%lld, count=%d, queuedBytes=%lld)."),
+		       TEXT(
+			       "Byte message rejected by queue limits for view '%s' (channel='%s', bytes=%lld, count=%d, queuedBytes=%lld)."
+		       ),
 		       *ViewName.ToString(), *Channel.ToString(), Size, ProducerMessages.Num(), ProducerBytes);
 		return ENativeWebQueueResult::RESULT_QUEUE_FULL;
 	}
-	ProducerMessages.Add(MoveTemp(Message)); ProducerBytes += Size;
+	ProducerMessages.Add(MoveTemp(Message));
+	ProducerBytes += Size;
 	UE_LOG(LogNativeWebMessaging, VeryVerbose,
 	       TEXT("Byte message queued for view '%s' (channel='%s', bytes=%lld, count=%d)."),
 	       *ViewName.ToString(), *Channel.ToString(), Size, ProducerMessages.Num());
@@ -429,20 +485,23 @@ bool UNativeWebView::SendStringToJavaScript(FName Channel, FStringView Value)
 
 bool UNativeWebView::SendBytesToJavaScript(FName Channel, TConstArrayView<uint8> Value)
 {
-	TArray<uint8> Copy; Copy.Append(Value.GetData(), Value.Num());
+	TArray<uint8> Copy;
+	Copy.Append(Value.GetData(), Value.Num());
 	return EnqueueBytesToJavaScript(Channel, MoveTemp(Copy)) == ENativeWebQueueResult::RESULT_QUEUED;
 }
 
 void UNativeWebView::Tick()
 {
 	check(IsInGameThread());
-	#if !PLATFORM_WINDOWS
+#if !PLATFORM_WINDOWS
 	return;
-	#else
+#else
 	if (bClosed || !Script) return;
 	TArray<FNativeWebMessage> Outgoing;
 	int32 DrainedFromProducer = 0;
 	{
+
+
 		FScopeLock Lock(&ProducerMutex);
 		const int32 Count = FMath::Min(64, ProducerMessages.Num());
 		DrainedFromProducer = Count;
@@ -457,7 +516,8 @@ void UNativeWebView::Tick()
 	for (const FNativeWebMessage& Message : Outgoing)
 	{
 		if (Script->QueueToJavaScript(Message) == ENativeWebQueueResult::RESULT_QUEUED) continue;
-		FNativeWebError QueueError = BuildNativeWebError(TEXT("QueueFull"), TEXT("JavaScript message queue is full."), ViewName);
+		FNativeWebError QueueError = BuildNativeWebError(
+			TEXT("QueueFull"), TEXT("JavaScript message queue is full."), ViewName);
 		UE_LOG(LogNativeWebMessaging, Warning, TEXT("View '%s' could not transfer message to QuickJS (channel='%s')."),
 		       *ViewName.ToString(), *Message.Channel.ToString());
 		Error.Broadcast(QueueError);
@@ -471,7 +531,8 @@ void UNativeWebView::Tick()
 	for (const FNativeWebMessage& Message : Outgoing)
 	{
 		if (bClosed) return;
-		UE_LOG(LogNativeWebMessaging, VeryVerbose, TEXT("Delivering message to JS for view '%s' (channel='%s', type=%d)."),
+		UE_LOG(LogNativeWebMessaging, VeryVerbose,
+		       TEXT("Delivering message to JS for view '%s' (channel='%s', type=%d)."),
 		       *ViewName.ToString(), *Message.Channel.ToString(), static_cast<int32>(Message.Type));
 		FQuickJSError JsError;
 		if (!Script->DeliverMessageToJavaScript(Message, JsError))
@@ -499,7 +560,9 @@ void UNativeWebView::Tick()
 		       *Message.Channel.ToString(), static_cast<int32>(Message.Type));
 		MessageReceived.Broadcast(Message);
 	}
-	int32 Jobs = 0; bool bPending = false; FQuickJSError JobError;
+	int32 Jobs = 0;
+	bool bPending = false;
+	FQuickJSError JobError;
 	const bool bJobsSucceeded = Script->PumpJobs(256, Jobs, bPending, JobError);
 	if (Jobs > 0 || bPending)
 	{
@@ -515,13 +578,15 @@ void UNativeWebView::Tick()
 		Error.Broadcast(NativeError);
 		if (bClosed) return;
 	}
-	#endif
+#endif
 }
 
 void UNativeWebView::Close()
 {
 	check(IsInGameThread());
 	{
+
+
 		FScopeLock Lock(&ProducerMutex);
 		if (bClosed)
 		{
@@ -530,17 +595,27 @@ void UNativeWebView::Close()
 		}
 		bClosed = true;
 		bInitialized = false;
-		ProducerMessages.Reset(); ProducerBytes = 0;
+		ProducerMessages.Reset();
+		ProducerBytes = 0;
 	}
 	UE_LOG(LogNativeWebView, Display, TEXT("Closing NativeWeb view '%s'."), *ViewName.ToString());
 	bVisible = false;
 	++Generation;
 	DetachFromPlayerViewport();
 #if PLATFORM_WINDOWS
-	if (Script) { Script->Close(); Script.Reset(); }
+	if (Script)
+	{
+		Script->Close();
+		Script.Reset();
+	}
 #endif
-	if (Surface) { Surface->Close(); Surface.Reset(); }
-	MessageReceived.Clear(); Error.Clear();
+	if (Surface)
+	{
+		Surface->Close();
+		Surface.Reset();
+	}
+	MessageReceived.Clear();
+	Error.Clear();
 	UE_LOG(LogNativeWebView, Verbose, TEXT("NativeWeb view '%s' closed."), *ViewName.ToString());
 }
 

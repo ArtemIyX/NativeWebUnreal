@@ -1,8 +1,11 @@
+
+
 #include "NativeWebDispatch.h"
 #include "Dispatch/NativeWebDispatchRegistry.h"
 
 namespace
 {
+
 	struct FNativeWebDispatchDeferredFactoryEntry
 	{
 		FNativeWebDispatchRouteKey RouteKey;
@@ -44,6 +47,8 @@ void FNativeWebDispatchModule::RegisterDeferredFactory(FNativeWebDispatchRouteKe
 	deferredEntry.Factory = MoveTemp(InFactory);
 	deferredEntry.bAllowReplace = bInAllowReplace;
 
+
+
 	FScopeLock lock(&GDeferredFactoriesLock);
 	GDeferredFactories.Add(MoveTemp(deferredEntry));
 }
@@ -54,6 +59,8 @@ void FNativeWebDispatchModule::StartupModule()
 
 	TArray<FNativeWebDispatchDeferredFactoryEntry> pendingEntries;
 	{
+
+
 		FScopeLock lock(&GDeferredFactoriesLock);
 		pendingEntries = MoveTemp(GDeferredFactories);
 		GDeferredFactories.Reset();

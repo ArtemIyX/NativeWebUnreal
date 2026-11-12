@@ -1,7 +1,4 @@
-/**
- * @file NativeWebContentHttpServer/Private/Services/NativeWebContentImageCacheService.cpp
- * @brief Image cache load/lookup/clear implementation.
- */
+
 #include "Services/NativeWebContentImageCacheService.h"
 
 #include "NativeWebContentHttpServer.h"
@@ -41,6 +38,8 @@ bool FNativeWebContentImageCacheService::GetImageByPackagePath(const FString& In
 	}
 
 	{
+
+
 		FScopeLock lock(&CacheMutex);
 		if (const TStrongObjectPtr<UTexture2D>* cachedImage = CachedImagesByPath.Find(normalizedPath))
 		{
@@ -56,6 +55,8 @@ bool FNativeWebContentImageCacheService::GetImageByPackagePath(const FString& In
 			SET_DWORD_STAT(STAT_NativeWebContentHttpServer_CachedImages, static_cast<uint32>(CachedImagesByPath.Num()));
 		}
 	}
+
+
 
 	FSoftObjectPath softPath(normalizedPath);
 	UE_LOG(LogNativeWebContentHttpServer, Verbose, TEXT("Cache miss for '%s'. Loading asset"), *normalizedPath);
@@ -80,6 +81,8 @@ bool FNativeWebContentImageCacheService::GetImageByPackagePath(const FString& In
 	}
 
 	{
+
+
 		FScopeLock lock(&CacheMutex);
 		CachedImagesByPath.Add(normalizedPath, TStrongObjectPtr<UTexture2D>(loadedTexture));
 		SET_DWORD_STAT(STAT_NativeWebContentHttpServer_CachedImages, static_cast<uint32>(CachedImagesByPath.Num()));
@@ -92,12 +95,16 @@ bool FNativeWebContentImageCacheService::GetImageByPackagePath(const FString& In
 
 int32 FNativeWebContentImageCacheService::GetCachedImageCount() const
 {
+
+
 	FScopeLock lock(&CacheMutex);
 	return CachedImagesByPath.Num();
 }
 
 void FNativeWebContentImageCacheService::ClearCache()
 {
+
+
 	FScopeLock lock(&CacheMutex);
 	const int32 numCachedBeforeClear = CachedImagesByPath.Num();
 	CachedImagesByPath.Reset();

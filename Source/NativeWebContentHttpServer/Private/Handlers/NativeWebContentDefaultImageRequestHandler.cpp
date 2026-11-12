@@ -1,7 +1,4 @@
-/**
- * @file NativeWebContentHttpServer/Private/Handlers/NativeWebContentDefaultImageRequestHandler.cpp
- * @brief Default handler implementation using module services.
- */
+
 #include "Handlers/NativeWebContentDefaultImageRequestHandler.h"
 
 #include "NativeWebContentHttpServer.h"

@@ -1,7 +1,4 @@
-/**
- * @file NativeWebContentHttpServer/Private/Services/NativeWebContentHttpServerRuntimeService.cpp
- * @brief HTTP listener and /img route dispatch implementation.
- */
+
 #include "Services/NativeWebContentHttpServerRuntimeService.h"
 
 #include "NativeWebContentHttpServer.h"
@@ -174,6 +171,8 @@ FString FNativeWebContentHttpServerRuntimeService::ParseBodyAsUtf8(const FHttpSe
 	}
 
 	const UTF8CHAR* const rawBodyData = reinterpret_cast<const UTF8CHAR*>(InRequest.Body.GetData());
+
+
 	FUTF8ToTCHAR converter(rawBodyData, InRequest.Body.Num());
 	return FString(converter.Length(), converter.Get());
 }
@@ -182,6 +181,8 @@ void FNativeWebContentHttpServerRuntimeService::CompleteJson(const FHttpResultCa
 {
 	const FString escapedMessage = InMessage.Replace(TEXT("\""), TEXT("\\\""));
 	const FString jsonBody = FString::Printf(TEXT("{\"error\":\"%s\"}"), *escapedMessage);
+
+
 	FTCHARToUTF8 utf8(*jsonBody);
 	TArray<uint8> bytes;
 	bytes.Append(reinterpret_cast<const uint8*>(utf8.Get()), utf8.Length());

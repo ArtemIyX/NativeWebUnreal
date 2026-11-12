@@ -1,3 +1,5 @@
+
+
 #include "Server/NativeWebWebSocketServerInstance.h"
 
 #include "Config/NativeWebWebSocketCVars.h"
@@ -20,6 +22,8 @@
 
 namespace
 {
+
+
 uint16 ResolveCloseStatusCode(ENativeWebWebSocketCloseReason InReason)
 {
 	switch (InReason)
@@ -37,6 +41,8 @@ uint16 ResolveCloseStatusCode(ENativeWebWebSocketCloseReason InReason)
 		return 1000; // normal closure
 	}
 }
+
+
 
 FString ResolveCloseReasonText(ENativeWebWebSocketCloseReason InReason)
 {
@@ -96,6 +102,8 @@ bool FNativeWebWebSocketServerInstance::Start()
 	}
 
 	{
+
+
 		FScopeLock codecLock(&CodecLock);
 		BinaryCodec = MakeShared<FNativeWebWebSocketBinaryPassthroughCodec>();
 		Utf8Codec = MakeShared<FNativeWebWebSocketUtf8StringCodec>(ENativeWebWebSocketPayloadFormat::Utf8String);
@@ -226,6 +234,8 @@ void FNativeWebWebSocketServerInstance::Stop()
 
 	TArray<INativeWebWebSocketNetwork*> socketsToClose;
 	{
+
+
 		FWriteScopeLock lock(ClientLock);
 		for (TPair<int64, FNativeWebWebSocketClientState>& pair : Clients)
 		{
@@ -275,6 +285,8 @@ bool FNativeWebWebSocketServerInstance::IsRunning() const
 
 void FNativeWebWebSocketServerInstance::SetPipelineConfig(const FNativeWebWebSocketPipelineConfig& InConfig)
 {
+
+
 	FScopeLock lock(&CodecLock);
 	PipelineConfig = InConfig;
 	PayloadFormat = InConfig.InPayloadFormat;
@@ -282,12 +294,16 @@ void FNativeWebWebSocketServerInstance::SetPipelineConfig(const FNativeWebWebSoc
 
 void FNativeWebWebSocketServerInstance::SetPayloadFormat(ENativeWebWebSocketPayloadFormat InPayloadFormat)
 {
+
+
 	FScopeLock lock(&CodecLock);
 	PayloadFormat = InPayloadFormat;
 }
 
 void FNativeWebWebSocketServerInstance::SetPacketCodec(const TSharedPtr<INativeWebWebSocketPacketCodec>& InCodec)
 {
+
+
 	FScopeLock lock(&CodecLock);
 	CustomCodec = InCodec;
 }
@@ -361,6 +377,8 @@ bool FNativeWebWebSocketServerInstance::PumpOutgoingOnSendThread()
 
 		if (sendRequest.bBroadcast && sendRequest.TargetClientIds.Num() == 0)
 		{
+
+
 			FReadScopeLock lock(ClientLock);
 			Clients.GetKeys(sendRequest.TargetClientIds);
 		}
@@ -410,6 +428,7 @@ bool FNativeWebWebSocketServerInstance::PumpOutgoingOnWriteThread()
 		return false;
 	}
 
+
 	struct FSendWork
 	{
 		int64 ClientId = 0;
@@ -421,6 +440,8 @@ bool FNativeWebWebSocketServerInstance::PumpOutgoingOnWriteThread()
 	const int32 maxBatchMessagesPerClient = FMath::Max(1, NativeWebWebSocketCVars::GetWriteBatchMaxMessages());
 	const int32 maxBatchBytesPerClient = FMath::Max(1, NativeWebWebSocketCVars::GetWriteBatchMaxBytes());
 	{
+
+
 		FWriteScopeLock lock(ClientLock);
 		for (TPair<int64, FNativeWebWebSocketClientState>& pair : Clients)
 		{
@@ -468,6 +489,8 @@ bool FNativeWebWebSocketServerInstance::PumpOutgoingOnWriteThread()
 
 		bool bTxLimited = false;
 		{
+
+
 			FWriteScopeLock lock(ClientLock);
 			if (FNativeWebWebSocketClientState* state = Clients.Find(item.ClientId))
 			{
@@ -506,6 +529,8 @@ bool FNativeWebWebSocketServerInstance::PumpOutgoingOnWriteThread()
 	}
 
 	{
+
+
 		FWriteScopeLock lock(ClientLock);
 		Stats.TxBytes += sentBytes;
 		UpdateRateStats_NoLock();
@@ -542,6 +567,8 @@ void FNativeWebWebSocketServerInstance::HandleClientConnected(INativeWebWebSocke
 	InSocket->SetReceiveCallBack(onReceive);
 
 	{
+
+
 		FWriteScopeLock lock(ClientLock);
 		FNativeWebWebSocketClientState& state = Clients.FindOrAdd(info.ClientId);
 		state.Info = info;
@@ -573,6 +600,8 @@ void FNativeWebWebSocketServerInstance::HandleClientDisconnected(INativeWebWebSo
 
 	int64 clientId = 0;
 	{
+
+
 		FWriteScopeLock lock(ClientLock);
 		if (int64* found = ClientIdsBySocket.Find(InSocket))
 		{
@@ -606,6 +635,8 @@ void FNativeWebWebSocketServerInstance::HandleClientPacket(INativeWebWebSocketNe
 	{
 		int64 clientId = 0;
 		{
+
+
 			FWriteScopeLock lock(ClientLock);
 			if (int64* found = ClientIdsBySocket.Find(InSocket))
 			{
@@ -623,6 +654,8 @@ void FNativeWebWebSocketServerInstance::HandleClientPacket(INativeWebWebSocketNe
 	{
 		int64 clientId = 0;
 		{
+
+
 			FWriteScopeLock lock(ClientLock);
 			if (int64* found = ClientIdsBySocket.Find(InSocket))
 			{
@@ -641,6 +674,8 @@ void FNativeWebWebSocketServerInstance::HandleClientPacket(INativeWebWebSocketNe
 	bool bRxLimited = false;
 	const int32 maxRxBytesPerSec = NativeWebWebSocketCVars::GetMaxRxBytesPerSecPerClient();
 	{
+
+
 		FWriteScopeLock lock(ClientLock);
 		if (int64* found = ClientIdsBySocket.Find(InSocket))
 		{
@@ -712,6 +747,8 @@ ENativeWebWebSocketSendResult FNativeWebWebSocketServerInstance::QueueSendReques
 	int32 payloadSizeBytes = InRequest.BytesPayload.Num();
 	if (payloadSizeBytes <= 0 && !InRequest.TextPayload.IsEmpty())
 	{
+
+
 		FTCHARToUTF8 utf8Payload(*InRequest.TextPayload);
 		payloadSizeBytes = utf8Payload.Length();
 	}
@@ -739,6 +776,8 @@ bool FNativeWebWebSocketServerInstance::EnqueueWritePacket(int64 InClientId, con
 	{
 		return false;
 	}
+
+
 
 	FWriteScopeLock lock(ClientLock);
 	FNativeWebWebSocketClientState* found = Clients.Find(InClientId);
@@ -818,6 +857,8 @@ void FNativeWebWebSocketServerInstance::WakeWriteThread()
 
 TSharedPtr<INativeWebWebSocketPacketCodec> FNativeWebWebSocketServerInstance::ResolveCodec(ENativeWebWebSocketPayloadFormat InPayloadFormat) const
 {
+
+
 	FScopeLock lock(&CodecLock);
 	if (CustomCodec.IsValid())
 	{
@@ -925,6 +966,8 @@ ENativeWebWebSocketSendResult FNativeWebWebSocketServerInstance::DisconnectClien
 {
 	INativeWebWebSocketNetwork* socket = nullptr;
 	{
+
+
 		FReadScopeLock lock(ClientLock);
 		if (FNativeWebWebSocketClientState* found = Clients.Find(InClientId))
 		{
@@ -942,6 +985,8 @@ ENativeWebWebSocketSendResult FNativeWebWebSocketServerInstance::DisconnectClien
 
 TArray<FNativeWebWebSocketClientInfo> FNativeWebWebSocketServerInstance::GetClients() const
 {
+
+
 	FReadScopeLock lock(ClientLock);
 	TArray<FNativeWebWebSocketClientInfo> outClients;
 	outClients.Reserve(Clients.Num());
@@ -954,6 +999,8 @@ TArray<FNativeWebWebSocketClientInfo> FNativeWebWebSocketServerInstance::GetClie
 
 FNativeWebWebSocketServerStats FNativeWebWebSocketServerInstance::GetStats() const
 {
+
+
 	FWriteScopeLock lock(ClientLock);
 	const_cast<FNativeWebWebSocketServerInstance*>(this)->UpdateRateStats_NoLock();
 	if (QueueDepthSamples > 0)
@@ -974,6 +1021,8 @@ FNativeWebWebSocketServerStats FNativeWebWebSocketServerInstance::GetStats() con
 
 FNativeWebWebSocketClientInfo FNativeWebWebSocketServerInstance::FindClientInfo(int64 InClientId) const
 {
+
+
 	FReadScopeLock lock(ClientLock);
 	if (const FNativeWebWebSocketClientState* found = Clients.Find(InClientId))
 	{
@@ -1034,6 +1083,8 @@ void FNativeWebWebSocketServerInstance::SweepConnectionHealthOnReadThread()
 	TArray<INativeWebWebSocketNetwork*> socketsToClose;
 
 	{
+
+
 		FWriteScopeLock lock(ClientLock);
 		for (TPair<int64, FNativeWebWebSocketClientState>& pair : Clients)
 		{
@@ -1086,6 +1137,8 @@ bool FNativeWebWebSocketServerInstance::AreQueuesDrained() const
 	{
 		return false;
 	}
+
+
 
 	FReadScopeLock lock(ClientLock);
 	if (Stats.QueueDepth > 0)

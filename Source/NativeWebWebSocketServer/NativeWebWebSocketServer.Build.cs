@@ -1,5 +1,16 @@
-﻿using UnrealBuildTool;
+﻿/**
+ * @file Source/NativeWebWebSocketServer/NativeWebWebSocketServer.Build.cs
+ * @brief Defines Unreal Build Tool rules for the NativeWebWebSocketServer module.
+ * @details Game-instance WebSocket servers and staged network pipeline.
+ * @ingroup NativeWebWebSocketServer
+ */
 
+using UnrealBuildTool;
+
+/**
+ * @brief Declares the native web web socket server type and its operations.
+ * @ingroup NativeWebWebSocketServer
+ */
 public class NativeWebWebSocketServer : ModuleRules
 {
     public NativeWebWebSocketServer(ReadOnlyTargetRules Target) : base(Target)

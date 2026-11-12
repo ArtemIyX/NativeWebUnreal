@@ -1,7 +1,4 @@
-/**
- * @file NativeWebContentHttpServer/Private/Services/NativeWebContentImageEncodeService.cpp
- * @brief Texture to PNG byte encoding implementation.
- */
+
 #include "Services/NativeWebContentImageEncodeService.h"
 
 #include "NativeWebContentHttpServer.h"
@@ -93,6 +90,8 @@ void FNativeWebContentImageEncodeService::RequestPngBytesByAssetPathAsync(const 
 	}
 
 	{
+
+
 		FScopeLock lock(&EncodedCacheMutex);
 		if (const FEncodedImageEntry* cachedEntry = EncodedImageCacheByPath.Find(normalizedPath))
 		{
@@ -149,6 +148,8 @@ void FNativeWebContentImageEncodeService::RequestPngBytesByAssetPathAsync(const 
 			}
 
 			{
+
+
 				FScopeLock lock(&EncodedCacheMutex);
 				FEncodedImageEntry& cachedEntry = EncodedImageCacheByPath.FindOrAdd(normalizedPath);
 				cachedEntry.Bytes = pngBytes;
@@ -162,6 +163,8 @@ void FNativeWebContentImageEncodeService::RequestPngBytesByAssetPathAsync(const 
 
 void FNativeWebContentImageEncodeService::ClearEncodedCache()
 {
+
+
 	FScopeLock lock(&EncodedCacheMutex);
 	const int32 numCached = EncodedImageCacheByPath.Num();
 	const int32 numInflight = InFlightRequestsByPath.Num();
@@ -172,6 +175,8 @@ void FNativeWebContentImageEncodeService::ClearEncodedCache()
 
 int32 FNativeWebContentImageEncodeService::GetEncodedCacheCount() const
 {
+
+
 	FScopeLock lock(&EncodedCacheMutex);
 	return EncodedImageCacheByPath.Num();
 }
@@ -180,6 +185,8 @@ void FNativeWebContentImageEncodeService::CompletePendingRequests(const FString&
 {
 	TArray<FOnEncodedImageReady> callbacks;
 	{
+
+
 		FScopeLock lock(&EncodedCacheMutex);
 		TArray<FOnEncodedImageReady>* pendingCallbacks = InFlightRequestsByPath.Find(InAssetPath);
 		if (!pendingCallbacks)

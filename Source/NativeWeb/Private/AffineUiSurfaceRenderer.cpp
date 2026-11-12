@@ -1,3 +1,5 @@
+
+
 #include "AffineUiSurfaceRenderer.h"
 
 #include "Async/Async.h"
@@ -45,6 +47,8 @@ namespace
 	// AffineUI's C log sink is process-global; this surface serializes all use on the RHI lane.
 	bool bAffineError = false;
 
+
+
 	void AffineLog(affineui_log_level Level, const char* Message, void*)
 	{
 		if (Level == AFFINEUI_LOG_ERROR)
@@ -57,6 +61,8 @@ namespace
 			UE_LOG(LogNativeWebRender, Warning, TEXT("AffineUI: %s"), UTF8_TO_TCHAR(Message ? Message : ""));
 		}
 	}
+
+
 
 	int LoadFontResource(void* User, const char* Url, affineui_resource_blob* Out)
 	{
@@ -83,6 +89,8 @@ namespace
 		return 1;
 	}
 
+
+
 	int ToAffineKey(EAffineUiInputKey Key)
 	{
 		switch (Key)
@@ -95,6 +103,7 @@ namespace
 	}
 }
 
+
 class FAffineUiSurfaceRenderer::FState
 {
 public:
@@ -102,6 +111,8 @@ public:
 	{
 		if (Ui) { affineui_ui_destroy(Ui); }
 	}
+
+
 
 	bool Render(FRHITexture* Output, FIntPoint Size, float DpiScale, FColor ClearColor, const FAffineUiContent& Content,
 	            const TArray<FAffineUiTextMutation>& TextMutations,
@@ -200,7 +211,11 @@ public:
 		}
 		const bool bHtmlChanged = !bHasContent || LastHtml != Content.Html;
 		const bool bCssChanged = !bHasContent || LastCss != Content.Css;
+
+
 		const FTCHARToUTF8 Html(*Content.Html);
+
+
 		const FTCHARToUTF8 Css(*Content.Css);
 		if (bCssChanged)
 		{
@@ -234,7 +249,11 @@ public:
 				affineui_dom_handle Node = Resolve(Mutation.NodeId);
 				affineui_dom_handle Parent = Resolve(Mutation.ParentId);
 				affineui_dom_handle Before = Resolve(Mutation.BeforeId);
+
+
 				const FTCHARToUTF8 Name(*Mutation.Name);
+
+
 				const FTCHARToUTF8 Value(*Mutation.Value);
 				switch (Mutation.Kind)
 				{
@@ -301,7 +320,11 @@ public:
 		{
 			if (const FString* PreviousText = AppliedText.Find(Mutation.ElementId); PreviousText && *PreviousText ==
 				Mutation.Text) { continue; }
+
+
 			const FTCHARToUTF8 ElementId(*Mutation.ElementId);
+
+
 			const FTCHARToUTF8 Text(*Mutation.Text);
 			(void)affineui_ui_set_text(Ui, ElementId.Get(), Text.Get());
 			// The C API returns false both for an unknown id and for an unchanged value.
@@ -420,6 +443,8 @@ public:
 	}
 
 private:
+
+
 	void RegisterClickHandler(uint64 NodeId)
 	{
 		if (RegisteredClickNodes.Contains(NodeId)) { return; }
@@ -433,6 +458,8 @@ private:
 		FClickBinding* Binding = new FClickBinding{this, DocumentEpoch, NodeId};
 		const FString Selector =
 			FString::Printf(TEXT(".nativeweb-click-%llu"), static_cast<unsigned long long>(NodeId));
+
+
 		const FTCHARToUTF8 SelectorUtf8(*Selector);
 		affineui_ui_on_click(Ui, SelectorUtf8.Get(), [](void* User)
 		                     {
@@ -452,13 +479,19 @@ private:
 		return {};
 	}
 
+
+
 	static bool IsValidHandle(affineui_dom_handle Handle) { return Handle.document_id != 0 && Handle.generation != 0; }
+
+
 
 	void PruneInvalidHandles()
 	{
 		for (auto It = NodeHandles.CreateIterator(); It; ++It)
 			if (!affineui_ui_node_valid(Ui, It.Value())) It.RemoveCurrent();
 	}
+
+
 
 	void DiscardRecordedCommands()
 	{
@@ -475,6 +508,8 @@ private:
 			Context.SafeRelease();
 		}
 	}
+
+
 
 	static bool Fail(const TCHAR* Operation, HRESULT Result = S_OK)
 	{

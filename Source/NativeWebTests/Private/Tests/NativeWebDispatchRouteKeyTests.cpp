@@ -1,3 +1,5 @@
+
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -6,15 +8,19 @@
 
 namespace
 {
+
 	struct FTestRoute
 	{
 		uint8 Group = 0;
 		FName Name;
 
+
+
 		bool operator==(const FTestRoute&) const = default;
 	};
 
 	uint32 GetTypeHash(const FTestRoute& InRoute)
+
 	{
 		return HashCombine(::GetTypeHash(InRoute.Group), ::GetTypeHash(InRoute.Name.GetComparisonIndex().ToUnstableInt()));
 	}
@@ -22,8 +28,12 @@ namespace
 	struct FOtherRoute
 	{
 		uint32 Value = 0;
+
+
 		bool operator==(const FOtherRoute&) const = default;
 	};
+
+
 
 	uint32 GetTypeHash(const FOtherRoute& InRoute)
 	{
@@ -32,6 +42,8 @@ namespace
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebDispatchRouteKeyPrimitiveTest, "NativeWebDispatch.RouteKey.Primitive", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+
 bool FNativeWebDispatchRouteKeyPrimitiveTest::RunTest(const FString& Parameters)
 {
 	const FNativeWebDispatchRouteKey scalar = MakeNativeWebDispatchRouteKey(7u);
@@ -56,6 +68,8 @@ bool FNativeWebDispatchRouteKeyPrimitiveTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebDispatchRouteKeyLifetimeTest, "NativeWebDispatch.RouteKey.CopyLifetime", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+
 bool FNativeWebDispatchRouteKeyLifetimeTest::RunTest(const FString& Parameters)
 {
 	FNativeWebDispatchRouteKey copiedKey;
@@ -75,6 +89,8 @@ bool FNativeWebDispatchRouteKeyLifetimeTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebDispatchRegistryRoutingTest, "NativeWebDispatch.Registry.Routing", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+
 bool FNativeWebDispatchRegistryRoutingTest::RunTest(const FString& Parameters)
 {
 	FNativeWebDispatchRegistry registry;
@@ -104,6 +120,8 @@ bool FNativeWebDispatchRegistryRoutingTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebDispatchHandlerRoutingTest, "NativeWebDispatch.Handler.Routing", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+
 bool FNativeWebDispatchHandlerRoutingTest::RunTest(const FString& Parameters)
 {
 	FNativeWebDispatchHandlerRegistry handlers;
@@ -126,6 +144,8 @@ bool FNativeWebDispatchHandlerRoutingTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebDispatchMetadataRoutingTest, "NativeWebDispatch.Handler.Metadata", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+
 bool FNativeWebDispatchMetadataRoutingTest::RunTest(const FString& Parameters)
 {
 	FNativeWebDispatchHandlerRegistry handlers;

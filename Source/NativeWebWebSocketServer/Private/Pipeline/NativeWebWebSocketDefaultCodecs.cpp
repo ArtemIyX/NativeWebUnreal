@@ -1,3 +1,5 @@
+
+
 #include "Pipeline/NativeWebWebSocketDefaultCodecs.h"
 #include "Config/NativeWebWebSocketCVars.h"
 
@@ -76,6 +78,8 @@ bool FNativeWebWebSocketUtf8StringCodec::DecodeInbound(const FNativeWebWebSocket
 		return false;
 	}
 
+
+
 	FUTF8ToTCHAR converter(reinterpret_cast<const ANSICHAR*>(InPacket.Payload.GetData()), InPacket.Payload.Num());
 	if (converter.Length() <= 0)
 	{
@@ -97,6 +101,8 @@ bool FNativeWebWebSocketUtf8StringCodec::EncodeSendRequest(const FNativeWebWebSo
 		OutError = TEXT("Empty text payload");
 		return false;
 	}
+
+
 
 	FTCHARToUTF8 utf8(*InRequest.TextPayload);
 	if (utf8.Length() <= 0)

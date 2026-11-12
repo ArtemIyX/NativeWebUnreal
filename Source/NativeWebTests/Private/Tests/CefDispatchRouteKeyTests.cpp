@@ -1,3 +1,5 @@
+#if WITH_DEV_AUTOMATION_TESTS
+
 #include "Misc/AutomationTest.h"
 #include "Dispatch/CefDispatchHandlerRegistry.h"
 #include "Dispatch/CefDispatchRouteKey.h"
@@ -156,3 +158,5 @@ bool FCefDispatchMetadataRoutingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Legacy handler call without metadata succeeds"), handlers.Handle(legacyRoute, *value, error), ECefDispatchHandlerResult::Ok);
 	return true;
 }
+
+#endif // WITH_DEV_AUTOMATION_TESTS

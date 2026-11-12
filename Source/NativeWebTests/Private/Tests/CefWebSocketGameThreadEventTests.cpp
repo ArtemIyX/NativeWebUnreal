@@ -1,14 +1,17 @@
+#if WITH_DEV_AUTOMATION_TESTS
+
 #include "Tests/CefWebSocketGameThreadEventTestTypes.h"
 
-#include "Config/CefWebSocketCVars.h"
+
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTLS.h"
 #include "HAL/Runnable.h"
 #include "HAL/RunnableThread.h"
 #include "Misc/AutomationTest.h"
 #include "Engine/GameInstance.h"
+#include "NativeWebWebSocketServer/Private/Server/CefWebSocketGameThreadEvent.h"
 #include "UObject/UObjectGlobals.h"
-#include "Server/CefWebSocketGameThreadEvent.h"
+
 #include "Subsystems/CefWebSocketSubsystem.h"
 
 namespace
@@ -849,3 +852,5 @@ bool FCefWebSocketServerInitializedThreadTest::RunTest(const FString& Parameters
 	CheckGameThreadCallbacks(*this, *server);
 	return true;
 }
+
+#endif // WITH_DEV_AUTOMATION_TESTS

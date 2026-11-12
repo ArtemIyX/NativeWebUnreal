@@ -38,7 +38,7 @@ void SNativeWebView::ReleaseInput()
 		bPointerPressed = false;
 		Forward({EAffineUiInputKind::MouseUp, FVector2D(-1.0, -1.0)});
 	}
-	if (HasMouseCapture()) FSlateApplication::Get().ReleaseMouseCapture();
+	if (HasMouseCapture()) FSlateApplication::Get().ReleaseAllPointerCapture();
 	if (HasKeyboardFocus()) FSlateApplication::Get().ClearKeyboardFocus(EFocusCause::SetDirectly);
 	else Forward({EAffineUiInputKind::FocusLost});
 }

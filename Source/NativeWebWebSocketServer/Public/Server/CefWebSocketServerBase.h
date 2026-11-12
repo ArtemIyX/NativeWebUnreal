@@ -24,7 +24,9 @@ struct FCefServerErrorEvent;
 struct FCefClientErrorEvent;
 struct FCefClientMessageEvent;
 class FCefGameThreadEventState;
+#if WITH_DEV_AUTOMATION_TESTS
 class FCefWebSocketGameThreadEventTestAccess;
+#endif
 
 /** Deletes the private event state where its definition is available. */
 struct NATIVEWEBWEBSOCKETSERVER_API FCefGameThreadEventStateDeleter
@@ -254,7 +256,9 @@ protected:
 	/** @brief FCefWebSocketServerInstance state. */
 	friend class FCefWebSocketServerInstance;
 	/** @brief Test-only access to the event queue seam. */
+#if WITH_DEV_AUTOMATION_TESTS
 	friend class FCefWebSocketGameThreadEventTestAccess;
+#endif
 	/**
 	 * @brief Starts the internal server runtime with the supplied configuration.
 	 * @param InNameId Stable identifier used to identify this server.

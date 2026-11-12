@@ -1,19 +1,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Containers/Ticker.h"
 #include "GameFramework/Actor.h"
 #include "AffineViewportDemoActor.generated.h"
 
-class APlayerController;
-class FAffineUiSurface;
-class FAffineUiScriptInstance;
-class UGameViewportClient;
-class SWidget;
-enum class EMouseCaptureMode : uint8;
-enum class EMouseLockMode : uint8;
+class UNativeWebView;
 
-/** Opt-in D3D11 viewport example for the AffineUI surface. */
+/** Opt-in example client for the reusable NativeWeb local-player API. */
 UCLASS()
 class NATIVEWEB_API AAffineViewportDemoActor : public AActor
 {
@@ -21,55 +14,33 @@ class NATIVEWEB_API AAffineViewportDemoActor : public AActor
 
 public:
 	AAffineViewportDemoActor();
-	virtual ~AAffineViewportDemoActor() override;
-
-	/** Queues a complete replacement of the document and its stylesheet. */
-	UFUNCTION(BlueprintCallable, Category="NativeWeb|Affine Demo")
-	bool SetDemoContent(const FString& Html, const FString& Css);
-
-	/** Reads both files before replacing content; a failed read preserves the current panel. */
-	UFUNCTION(BlueprintCallable, Category="NativeWeb|Affine Demo")
-	bool LoadDemoFiles(const FString& HtmlPath, const FString& CssPath, FString& OutError);
-
-	/** Sets a manual pixel size and CSS DPI scale in place of following the viewport. */
-	UFUNCTION(BlueprintCallable, Category="NativeWeb|Affine Demo")
-	bool ResizeDemoSurface(int32 Width, int32 Height, float DpiScale = 1.0f);
-
-	/** Reports the most recent asynchronous render failure, if any. */
-	UFUNCTION(BlueprintPure, Category="NativeWeb|Affine Demo")
-	FString GetDemoLastError() const;
-
-	/** Optionally replace the Vue mount shell with custom HTML and CSS at Play. */
+	
+protected:
 	UPROPERTY(EditAnywhere, Category="NativeWeb|Affine Demo")
 	bool bLoadFilesOnBeginPlay = false;
-
 	UPROPERTY(EditAnywhere, Category="NativeWeb|Affine Demo", meta=(EditCondition="bLoadFilesOnBeginPlay"))
 	FString HtmlFilePath;
-
 	UPROPERTY(EditAnywhere, Category="NativeWeb|Affine Demo", meta=(EditCondition="bLoadFilesOnBeginPlay"))
 	FString CssFilePath;
+
+public:
+	UFUNCTION(BlueprintCallable, Category="NativeWeb|Affine Demo")
+	bool SetDemoContent(const FString& Html, const FString& Css);
+	UFUNCTION(BlueprintCallable, Category="NativeWeb|Affine Demo")
+	bool LoadDemoFiles(const FString& HtmlPath, const FString& CssPath, FString& OutError);
+	UFUNCTION(BlueprintCallable, Category="NativeWeb|Affine Demo")
+	bool ResizeDemoSurface(int32 Width, int32 Height, float DpiScale = 1.0f);
+	UFUNCTION(BlueprintPure, Category="NativeWeb|Affine Demo")
+	FString GetDemoLastError() const { return LastError; }
+
 
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-#if PLATFORM_WINDOWS
-	bool PumpVueJobs(float DeltaTime);
-	void StartVueJobPump();
-	void StopVueJobPump();
-
-	TUniquePtr<FAffineUiScriptInstance> ScriptInstance;
-	FTSTicker::FDelegateHandle VueJobTicker;
-	TWeakObjectPtr<APlayerController> InputController;
-	EMouseCaptureMode PreviousCaptureMode{};
-	EMouseLockMode PreviousLockMode{};
-	bool bPreviousShowMouseCursor = false;
-	bool bPreviousIgnoreInput = false;
-	bool bPreviousHideCursorDuringCapture = false;
-#endif
-	TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface;
-	TWeakObjectPtr<UGameViewportClient> ViewportClient;
-	TSharedPtr<SWidget> ViewportWidget;
-	bool bFollowViewport = true;
+	UPROPERTY(Transient)
+	TObjectPtr<UNativeWebView> View;
+	FName ViewName = TEXT("AffineViewportDemo");
+	FString LastError;
 };

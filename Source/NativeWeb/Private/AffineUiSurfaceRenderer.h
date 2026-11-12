@@ -10,7 +10,7 @@ class FAffineUiSurfaceRenderer
 {
 public:
 	void Draw(FTextureRenderTargetResource* Target, FIntPoint Size, float DpiScale, FColor ClearColor,
-		FAffineUiContent Content, FString FontDirectory, uint64 Revision,
+		FAffineUiContent Content, TSharedRef<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe> FontAssets, uint64 Revision,
 		TArray<FAffineUiTextMutation> TextMutations,
 		TArray<FAffineUiMutation> Mutations, uint64 DocumentEpoch,
 		TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface);

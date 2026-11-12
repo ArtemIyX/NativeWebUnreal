@@ -64,21 +64,22 @@ int LoadFontResource(void* User, const char* Url, affineui_resource_blob* Out)
 	FString Name = UTF8_TO_TCHAR(Url);
 	if (Name.StartsWith(TEXT("/"))) { Name.RightChopInline(1); }
 	if (!Name.StartsWith(TEXT("fonts/"), ESearchCase::CaseSensitive)) { return 0; }
-	Name.RightChopInline(6);
-	const FString Extension = FPaths::GetExtension(Name);
-	if (Name.Contains(TEXT("/")) || Name.Contains(TEXT("\\")) || Name.Contains(TEXT(":")) ||
+	const FString Leaf = Name.RightChop(6);
+	const FString Extension = FPaths::GetExtension(Leaf);
+	if (Leaf.IsEmpty() || Leaf.Contains(TEXT("/")) || Leaf.Contains(TEXT("\\")) || Leaf.Contains(TEXT(":")) ||
 		(!Extension.Equals(TEXT("ttf")) && !Extension.Equals(TEXT("otf"))))
 	{
 		return 0;
 	}
 
-	TUniquePtr<TArray<uint8>> Bytes = MakeUnique<TArray<uint8>>();
-	const FString& Directory = *static_cast<const FString*>(User);
-	if (!FFileHelper::LoadFileToArray(*Bytes, *FPaths::Combine(Directory, Name)) || Bytes->IsEmpty()) { return 0; }
-	Out->data = Bytes->GetData();
-	Out->size = static_cast<size_t>(Bytes->Num());
+	const TMap<FString, TArray<uint8>>& Assets = *static_cast<const TMap<FString, TArray<uint8>>*>(User);
+	const TArray<uint8>* Bytes = Assets.Find(Name);
+	if (!Bytes || Bytes->IsEmpty()) { return 0; }
+	TUniquePtr<TArray<uint8>> Copy = MakeUnique<TArray<uint8>>(*Bytes);
+	Out->data = Copy->GetData();
+	Out->size = static_cast<size_t>(Copy->Num());
 	Out->release = [](void* Resource) { delete static_cast<TArray<uint8>*>(Resource); };
-	Out->user = Bytes.Release();
+	Out->user = Copy.Release();
 	return 1;
 }
 
@@ -104,7 +105,8 @@ public:
 
 	bool Render(FRHITexture* Output, FIntPoint Size, float DpiScale, FColor ClearColor, const FAffineUiContent& Content,
 		const TArray<FAffineUiTextMutation>& TextMutations,
-		const TArray<FAffineUiMutation>& Mutations, uint64 InDocumentEpoch, const FString& InFontDirectory)
+		const TArray<FAffineUiMutation>& Mutations, uint64 InDocumentEpoch,
+		TSharedRef<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe> InFontAssets)
 	{
 		if (!Output || !IsRHID3D11()) { return Fail(TEXT("D3D11 output is unavailable")); }
 		ID3D11DynamicRHI* Rhi = GetID3D11DynamicRHI();
@@ -174,10 +176,10 @@ public:
 				DiscardRecordedCommands();
 				return Fail(TEXT("AffineUI initialization failed"));
 			}
-			FontDirectory = InFontDirectory;
-			if (!FontDirectory.IsEmpty())
+			FontAssets = InFontAssets;
+			if (!FontAssets->IsEmpty())
 			{
-				affineui_ui_set_resource_loader(Ui, &LoadFontResource, &FontDirectory);
+				affineui_ui_set_resource_loader(Ui, &LoadFontResource, const_cast<TMap<FString, TArray<uint8>>*>(FontAssets.Get()));
 			}
 			UE_LOG(LogAffineUiSurfaceRender, Display, TEXT("AffineUI %s initialized on Unreal D3D11"), UTF8_TO_TCHAR(affineui_version()));
 		}
@@ -422,7 +424,7 @@ private:
 	TMap<uint64, affineui_dom_handle> NodeHandles;
 	TSet<uint64> RegisteredClickNodes;
 	TArray<uint64> ClickedNodes;
-	FString FontDirectory;
+	TSharedPtr<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe> FontAssets;
 	FIntPoint RenderedSize = FIntPoint::ZeroValue;
 	float RenderedDpiScale = 1.0f;
 	uint64 DocumentEpoch = 0;
@@ -433,22 +435,23 @@ class FAffineUiSurfaceRenderer::FState {};
 #endif
 
 void FAffineUiSurfaceRenderer::Draw(FTextureRenderTargetResource* Target, FIntPoint Size, float DpiScale, FColor ClearColor,
-	FAffineUiContent Content, FString FontDirectory, uint64 Revision, TArray<FAffineUiTextMutation> TextMutations,
+	FAffineUiContent Content, TSharedRef<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe> FontAssets,
+	uint64 Revision, TArray<FAffineUiTextMutation> TextMutations,
 	TArray<FAffineUiMutation> Mutations, uint64 DocumentEpoch,
 	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface)
 {
-	ENQUEUE_RENDER_COMMAND(AffineSurfaceDraw)([this, Target, Size, DpiScale, ClearColor, Content = MoveTemp(Content), FontDirectory = MoveTemp(FontDirectory),
+	ENQUEUE_RENDER_COMMAND(AffineSurfaceDraw)([this, Target, Size, DpiScale, ClearColor, Content = MoveTemp(Content), FontAssets = MoveTemp(FontAssets),
 		TextMutations = MoveTemp(TextMutations), Mutations = MoveTemp(Mutations), DocumentEpoch, Revision, Surface](FRHICommandListImmediate& RHICmdList) mutable
 	{
 		FTextureRHIRef Output;
 		if (Target) { Output = Target->GetRenderTargetTexture(); }
-		RHICmdList.EnqueueLambda([this, Output, Size, DpiScale, ClearColor, Content = MoveTemp(Content), FontDirectory = MoveTemp(FontDirectory),
+		RHICmdList.EnqueueLambda([this, Output, Size, DpiScale, ClearColor, Content = MoveTemp(Content), FontAssets = MoveTemp(FontAssets),
 			TextMutations = MoveTemp(TextMutations), Mutations = MoveTemp(Mutations), DocumentEpoch, Revision, Surface](FRHICommandListBase&)
 		{
 			bool bSuccess = false;
 #if PLATFORM_WINDOWS
 			if (!State) { State = new FState(); }
-			bSuccess = State->Render(Output.GetReference(), Size, DpiScale, ClearColor, Content, TextMutations, Mutations, DocumentEpoch, FontDirectory);
+			bSuccess = State->Render(Output.GetReference(), Size, DpiScale, ClearColor, Content, TextMutations, Mutations, DocumentEpoch, FontAssets);
 #endif
 			AsyncTask(ENamedThreads::GameThread, [Surface, Revision, bSuccess]()
 			{

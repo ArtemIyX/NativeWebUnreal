@@ -5,6 +5,7 @@
 #include "DynamicRHI.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Misc/FileHelper.h"
+#include "HAL/FileManager.h"
 #include "RenderCommandFence.h"
 #include "RenderingThread.h"
 #include "RHICommandList.h"
@@ -69,6 +70,7 @@ public:
 	FAffineUiSurfaceError OnError;
 	FAffineUiClick OnClick;
 	FAffineUiSurfaceRenderer Renderer;
+	TSharedPtr<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe> FontAssets;
 	TStrongObjectPtr<UTextureRenderTarget2D> Output;
 	TStrongObjectPtr<UTextureRenderTarget2D> Pending;
 	TArray<TUniquePtr<FRetiredTexture>> Retired;
@@ -114,6 +116,22 @@ TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> FAffineUiSurface::Create(const
 	}
 	TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface = MakeShareable(new FAffineUiSurface());
 	Surface->Impl->Desired = Desc;
+	TMap<FString, TArray<uint8>> PreloadedFonts;
+	if (!Desc.FontDirectory.IsEmpty())
+	{
+		TArray<FString> FontFiles;
+		IFileManager::Get().FindFiles(FontFiles, *FPaths::Combine(Desc.FontDirectory, TEXT("*.ttf")), true, false);
+		TArray<FString> OpenTypeFiles;
+		IFileManager::Get().FindFiles(OpenTypeFiles, *FPaths::Combine(Desc.FontDirectory, TEXT("*.otf")), true, false);
+		FontFiles.Append(OpenTypeFiles);
+		for (const FString& File : FontFiles)
+		{
+			TArray<uint8> Bytes;
+			if (FFileHelper::LoadFileToArray(Bytes, *FPaths::Combine(Desc.FontDirectory, File)) && !Bytes.IsEmpty())
+				PreloadedFonts.Add(FString(TEXT("fonts/")) + File, MoveTemp(Bytes));
+		}
+	}
+	Surface->Impl->FontAssets = MakeShared<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe>(MoveTemp(PreloadedFonts));
 	ActiveSurface = Surface;
 	Surface->StartPending();
 	return Surface;
@@ -339,7 +357,7 @@ void FAffineUiSurface::StartPending()
 	TArray<FAffineUiMutation> Mutations = MoveTemp(Impl->PendingMutations);
 	Impl->PendingMutations.Reset();
 	Impl->Renderer.Draw(Target->GameThread_GetRenderTargetResource(), Impl->Desired.PixelSize,
-		Impl->Desired.DpiScale, Impl->Desired.ClearColor, Impl->Desired.Content, Impl->Desired.FontDirectory, Impl->PendingRevision,
+		Impl->Desired.DpiScale, Impl->Desired.ClearColor, Impl->Desired.Content, Impl->FontAssets.ToSharedRef(), Impl->PendingRevision,
 		MoveTemp(TextMutations), MoveTemp(Mutations), Impl->DocumentEpoch, AsShared());
 }
 

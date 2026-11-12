@@ -53,8 +53,22 @@ TUniquePtr<FAffineUiScriptInstance> FAffineUiScriptInstance::Create(const FAffin
 	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::RemoveAttribute, "removeAttribute", 2));
 	JS_SetPropertyStr(Context, Api, "setClickHandler",
 	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::SetClickHandler, "setClickHandler", 1));
+	JS_SetPropertyStr(Context, Api, "postString",
+	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::PostString, "postString", 2));
+	JS_SetPropertyStr(Context, Api, "postBytes",
+	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::PostBytes, "postBytes", 2));
 	JS_SetPropertyStr(Context, Global, "nativeWeb", Api);
 	JS_FreeValue(Context, Global);
+	FQuickJSError BootstrapError;
+	JSValue BootstrapResult = JS_UNDEFINED;
+	const FString Bootstrap = TEXT("(()=>{const listeners=[];Object.defineProperty(nativeWeb,'addMessageListener',{value:function(listener){if(typeof listener!=='function')throw new TypeError('listener must be a function');listeners.push(listener);let active=true;return()=>{if(!active)return;active=false;const i=listeners.indexOf(listener);if(i>=0)listeners.splice(i,1)}}});Object.defineProperty(nativeWeb,'__dispatchMessages',{value:function(messages){const errors=[];for(const message of messages){for(const listener of listeners.slice()){try{listener(message)}catch(error){errors.push(String(error))}}}return errors}})})();");
+	if (!Instance->Runtime->Evaluate(Bootstrap, TEXT("<nativeweb-bootstrap>"), EQuickJSSourceType::Script, BootstrapResult, BootstrapError))
+	{
+		OutError = BootstrapError.Message;
+		Instance->Close();
+		return nullptr;
+	}
+	JS_FreeValue(Context, BootstrapResult);
 	return Instance;
 }
 
@@ -126,6 +140,225 @@ bool FAffineUiScriptInstance::PumpJobs(int32 MaxJobs, int32& OutExecuted, bool& 
 		return false;
 	}
 	return Runtime->ExecutePendingJobs(MaxJobs, OutExecuted, bOutPending, OutError);
+}
+
+namespace
+{
+int64 MessageSize(const FNativeWebMessage& Message)
+{
+	if (Message.Type == ENativeWebPayloadType::Bytes) return Message.Bytes.Num();
+	const FTCHARToUTF8 Utf8(*Message.String, Message.String.Len());
+	return Utf8.Length();
+}
+}
+
+ENativeWebQueueResult FAffineUiScriptInstance::QueueToJavaScript(const FNativeWebMessage& Message)
+{
+	check(IsInGameThread());
+	if (bClosing || !Runtime || !Runtime->IsOpen()) return ENativeWebQueueResult::Closed;
+	const int64 Size = MessageSize(Message);
+	FScopeLock Lock(&MessageMutex);
+	if (Size > 1024 * 1024 || OutboundMessages.Num() >= 64 || OutboundBytes + Size > 4 * 1024 * 1024)
+		return ENativeWebQueueResult::QueueFull;
+	OutboundMessages.Add(Message);
+	OutboundBytes += Size;
+	return ENativeWebQueueResult::Queued;
+}
+
+int32 FAffineUiScriptInstance::DrainMessagesFromJavaScript(TArray<FNativeWebMessage>& OutMessages, int32 MaxMessages)
+{
+	check(IsInGameThread());
+	FScopeLock Lock(&MessageMutex);
+	const int32 Count = FMath::Min(MaxMessages, InboundMessages.Num());
+	OutMessages.Reserve(OutMessages.Num() + Count);
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		FNativeWebMessage Message = MoveTemp(InboundMessages[0]);
+		InboundMessages.RemoveAt(0, 1, EAllowShrinking::No);
+		InboundBytes -= MessageSize(Message);
+		OutMessages.Add(MoveTemp(Message));
+	}
+	return Count;
+}
+
+int32 FAffineUiScriptInstance::DrainMessagesToJavaScript(TArray<FNativeWebMessage>& OutMessages, int32 MaxMessages)
+{
+	check(IsInGameThread());
+	FScopeLock Lock(&MessageMutex);
+	const int32 Count = FMath::Min(MaxMessages, OutboundMessages.Num());
+	OutMessages.Reserve(OutMessages.Num() + Count);
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		FNativeWebMessage Message = MoveTemp(OutboundMessages[0]);
+		OutboundMessages.RemoveAt(0, 1, EAllowShrinking::No);
+		OutboundBytes -= MessageSize(Message);
+		OutMessages.Add(MoveTemp(Message));
+	}
+	return Count;
+}
+
+void FAffineUiScriptInstance::RefreshDocumentEpoch()
+{
+	check(IsInGameThread());
+	if (Surface) DocumentEpoch = Surface->GetDocumentEpoch();
+}
+
+bool FAffineUiScriptInstance::DeliverMessageToJavaScript(const FNativeWebMessage& Message, FQuickJSError& OutError)
+{
+	check(IsInGameThread());
+	if (bClosing || !Runtime || !Runtime->IsOpen()) return false;
+	JSContext* Context = Runtime->GetContext();
+	JSValue Global = JS_GetGlobalObject(Context);
+	JSValue NativeWeb = JS_GetPropertyStr(Context, Global, "nativeWeb");
+	JSValue Dispatch = JS_GetPropertyStr(Context, NativeWeb, "__dispatchMessages");
+	JS_FreeValue(Context, NativeWeb);
+	JS_FreeValue(Context, Global);
+	if (!JS_IsFunction(Context, Dispatch)) { JS_FreeValue(Context, Dispatch); return false; }
+	JSValue Item = JS_NewObject(Context);
+	if (!Message.Channel.IsNone())
+	{
+		const FTCHARToUTF8 Channel(*Message.Channel.ToString());
+		JS_SetPropertyStr(Context, Item, "channel", JS_NewStringLen(Context, Channel.Get(), Channel.Length()));
+	}
+	if (Message.Type == ENativeWebPayloadType::String)
+	{
+		const FTCHARToUTF8 Value(*Message.String, Message.String.Len());
+		JS_SetPropertyStr(Context, Item, "type", JS_NewString(Context, "string"));
+		JS_SetPropertyStr(Context, Item, "value", JS_NewStringLen(Context, Value.Get(), Value.Length()));
+	}
+	else
+	{
+		JS_SetPropertyStr(Context, Item, "type", JS_NewString(Context, "bytes"));
+		JS_SetPropertyStr(Context, Item, "value", JS_NewUint8ArrayCopy(Context, Message.Bytes.GetData(), Message.Bytes.Num()));
+	}
+	JSValue Items = JS_NewArray(Context);
+	JS_SetPropertyUint32(Context, Items, 0, Item);
+	JSValue Result = JS_UNDEFINED;
+	const bool bSuccess = Runtime->Call(Dispatch, JS_UNDEFINED, 1, &Items, Result, OutError);
+	bool bHadListenerError = false;
+	if (bSuccess && JS_IsArray(Result))
+	{
+		JSValue LengthValue = JS_GetPropertyStr(Context, Result, "length");
+		uint32 ErrorCount = 0;
+		if (JS_ToUint32(Context, &ErrorCount, LengthValue) == 0 && ErrorCount > 0)
+		{
+			JSValue FirstError = JS_GetPropertyUint32(Context, Result, 0);
+			bool bValid = false;
+			OutError.Message = ReadString(Context, FirstError, bValid);
+			JS_FreeValue(Context, FirstError);
+			bHadListenerError = true;
+		}
+		JS_FreeValue(Context, LengthValue);
+	}
+	JS_FreeValue(Context, Result);
+	JS_FreeValue(Context, Items);
+	JS_FreeValue(Context, Dispatch);
+	return bSuccess && !bHadListenerError;
+}
+
+JSValue FAffineUiScriptInstance::PostString(JSContext* Context, JSValueConst, int32 ArgCount, JSValueConst* Args)
+{
+	if (ArgCount < 1 || ArgCount > 2 || !JS_IsString(Args[0]) ||
+		(ArgCount == 2 && !JS_IsUndefined(Args[1]) && !JS_IsString(Args[1])))
+		return JS_ThrowTypeError(Context, "postString expects a string value and an optional string channel");
+	FAffineUiScriptInstance* Instance = static_cast<FAffineUiScriptInstance*>(JS_GetContextOpaque(Context));
+	if (!Instance || Instance->bClosing) return JS_FALSE;
+	size_t ValueLength = 0;
+	const char* ValueUtf8 = JS_ToCStringLen(Context, &ValueLength, Args[0]);
+	if (!ValueUtf8) return JS_EXCEPTION;
+	if (ValueLength > 1024 * 1024) { JS_FreeCString(Context, ValueUtf8); return JS_ThrowRangeError(Context, "NativeWeb message exceeds 1 MiB"); }
+	FNativeWebMessage Message;
+	Message.Type = ENativeWebPayloadType::String;
+	const FUTF8ToTCHAR ValueText(ValueUtf8, static_cast<int32>(ValueLength));
+	Message.String = FString(ValueText.Length(), ValueText.Get());
+	JS_FreeCString(Context, ValueUtf8);
+	if (ArgCount == 2 && !JS_IsUndefined(Args[1]))
+	{
+		bool bValid = false;
+		const FString Channel = ReadString(Context, Args[1], bValid);
+		if (JS_HasException(Context)) return JS_EXCEPTION;
+		if (!bValid) return JS_ThrowTypeError(Context, "channel must be a valid string");
+		Message.Channel = FName(*Channel);
+	}
+	FScopeLock Lock(&Instance->MessageMutex);
+	const int64 Size = static_cast<int64>(ValueLength);
+	if (Instance->InboundMessages.Num() >= 64 || Instance->InboundBytes + Size > 4 * 1024 * 1024) return JS_FALSE;
+	Instance->InboundMessages.Add(MoveTemp(Message));
+	Instance->InboundBytes += Size;
+	return JS_TRUE;
+}
+
+JSValue FAffineUiScriptInstance::PostBytes(JSContext* Context, JSValueConst, int32 ArgCount, JSValueConst* Args)
+{
+	if (ArgCount < 1 || ArgCount > 2 ||
+		(ArgCount == 2 && !JS_IsUndefined(Args[1]) && !JS_IsString(Args[1])))
+		return JS_ThrowTypeError(Context, "postBytes expects an ArrayBuffer or view and an optional string channel");
+	FAffineUiScriptInstance* Instance = static_cast<FAffineUiScriptInstance*>(JS_GetContextOpaque(Context));
+	if (!Instance || Instance->bClosing) return JS_FALSE;
+	uint8* Data = nullptr;
+	size_t Length = 0;
+	if (JS_IsArrayBuffer(Args[0]))
+	{
+		Data = JS_GetArrayBuffer(Context, &Length, Args[0]);
+		if (!Data && Length != 0) return JS_EXCEPTION;
+	}
+	else if (JS_IsDataView(Args[0]))
+	{
+		JSValue BufferValue = JS_GetPropertyStr(Context, Args[0], "buffer");
+		JSValue OffsetValue = JS_GetPropertyStr(Context, Args[0], "byteOffset");
+		JSValue LengthValue = JS_GetPropertyStr(Context, Args[0], "byteLength");
+		uint64 Offset64 = 0, Length64 = 0;
+		if (!JS_IsArrayBuffer(BufferValue) || JS_ToIndex(Context, &Offset64, OffsetValue) < 0 || JS_ToIndex(Context, &Length64, LengthValue) < 0)
+		{
+			JS_FreeValue(Context, BufferValue); JS_FreeValue(Context, OffsetValue); JS_FreeValue(Context, LengthValue);
+			return JS_ThrowTypeError(Context, "invalid DataView");
+		}
+		size_t BufferLength = 0;
+		uint8* BufferData = JS_GetArrayBuffer(Context, &BufferLength, BufferValue);
+		JS_FreeValue(Context, BufferValue); JS_FreeValue(Context, OffsetValue); JS_FreeValue(Context, LengthValue);
+		if ((!BufferData && BufferLength != 0) || Offset64 > BufferLength || Length64 > BufferLength - Offset64)
+			return JS_ThrowTypeError(Context, "invalid DataView bounds");
+		Data = BufferData ? BufferData + Offset64 : nullptr;
+		Length = Length64;
+	}
+	else
+	{
+		JSValue ExactBuffer = JS_GetTypedArrayBuffer(Context, Args[0], nullptr, nullptr, nullptr);
+		if (JS_IsException(ExactBuffer)) return JS_ThrowTypeError(Context, "value must be an ArrayBuffer or ArrayBufferView");
+		JSValue OffsetValue = JS_GetPropertyStr(Context, Args[0], "byteOffset");
+		JSValue LengthValue = JS_GetPropertyStr(Context, Args[0], "byteLength");
+		uint64 Offset = 0, ViewLength = 0;
+		if (JS_ToIndex(Context, &Offset, OffsetValue) < 0 || JS_ToIndex(Context, &ViewLength, LengthValue) < 0)
+		{
+			JS_FreeValue(Context, ExactBuffer); JS_FreeValue(Context, OffsetValue); JS_FreeValue(Context, LengthValue);
+			return JS_ThrowTypeError(Context, "invalid ArrayBufferView bounds");
+		}
+		JS_FreeValue(Context, OffsetValue); JS_FreeValue(Context, LengthValue);
+		size_t BufferLength = 0;
+		uint8* BufferData = JS_GetArrayBuffer(Context, &BufferLength, ExactBuffer);
+		JS_FreeValue(Context, ExactBuffer);
+		if ((!BufferData && BufferLength != 0) || Offset > BufferLength || ViewLength > BufferLength - Offset)
+			return JS_ThrowTypeError(Context, "invalid ArrayBufferView");
+		Data = BufferData ? BufferData + Offset : nullptr;
+		Length = ViewLength;
+	}
+	if (Length > 1024 * 1024) return JS_ThrowRangeError(Context, "NativeWeb message exceeds 1 MiB");
+	FNativeWebMessage Message;
+	Message.Type = ENativeWebPayloadType::Bytes;
+	if (Length) Message.Bytes.Append(Data, static_cast<int32>(Length));
+	if (ArgCount == 2 && !JS_IsUndefined(Args[1]))
+	{
+		bool bValid = false;
+		const FString Channel = ReadString(Context, Args[1], bValid);
+		if (JS_HasException(Context)) return JS_EXCEPTION;
+		if (!bValid) return JS_ThrowTypeError(Context, "channel must be a valid string");
+		Message.Channel = FName(*Channel);
+	}
+	FScopeLock Lock(&Instance->MessageMutex);
+	if (Instance->InboundMessages.Num() >= 64 || Instance->InboundBytes + static_cast<int64>(Length) > 4 * 1024 * 1024) return JS_FALSE;
+	Instance->InboundMessages.Add(MoveTemp(Message));
+	Instance->InboundBytes += static_cast<int64>(Length);
+	return JS_TRUE;
 }
 
 FString FAffineUiScriptInstance::ReadString(JSContext* Context, JSValueConst Value, bool& bOutValid)
@@ -354,6 +587,12 @@ JSValue FAffineUiScriptInstance::SetClickHandler(JSContext* C, JSValueConst, int
 void FAffineUiScriptInstance::Close()
 {
 	if (!IsInGameThread()) { return; }
+	bClosing = true;
+	{
+		FScopeLock Lock(&MessageMutex);
+		InboundMessages.Reset(); OutboundMessages.Reset();
+		InboundBytes = 0; OutboundBytes = 0;
+	}
 	if (Runtime)
 	{
 		if (JSContext* Context = Runtime->GetContext()) { JS_SetContextOpaque(Context, nullptr); }

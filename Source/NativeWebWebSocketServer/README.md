@@ -12,8 +12,8 @@
   - Write: socket write flush
 
 ## Blueprint Quick Start
-1. Get `CefWebSocketSubsystem` from `GameInstance`.
-2. Build `FCefWebSocketServerCreateOptions`:
+1. Get `NativeWebWebSocketSubsystem` from `GameInstance`.
+2. Build `FNativeWebWebSocketServerCreateOptions`:
    - `NameId`
    - `RequestedPort`
    - `InPipelineConfig`
@@ -34,27 +34,27 @@
 
 ## C++ Quick Start
 ```cpp
-UCefWebSocketSubsystem* wsSubsystem = GetGameInstance()->GetSubsystem<UCefWebSocketSubsystem>();
+UNativeWebWebSocketSubsystem* wsSubsystem = GetGameInstance()->GetSubsystem<UNativeWebWebSocketSubsystem>();
 if (!wsSubsystem)
 {
     return;
 }
 
-FCefWebSocketServerCreateOptions options;
+FNativeWebWebSocketServerCreateOptions options;
 options.NameId = FName(TEXT("UiBridge"));
 options.RequestedPort = 7001;
-options.InPipelineConfig.InPayloadFormat = ECefWebSocketPayloadFormat::JsonString;
+options.InPipelineConfig.InPayloadFormat = ENativeWebWebSocketPayloadFormat::JsonString;
 options.InPipelineConfig.InInboundQueueMax = 4096;
 options.InPipelineConfig.InSendQueueMax = 4096;
 
-UCefWebSocketServerBase* server = nullptr;
-const FCefWebSocketServerCreateResult createResult = wsSubsystem->CreateOrGetServer(
+UNativeWebWebSocketServerBase* server = nullptr;
+const FNativeWebWebSocketServerCreateResult createResult = wsSubsystem->CreateOrGetServer(
     options,
-    UCefWebSocketServerBase::StaticClass(),
-    UCefWebSocketClientBase::StaticClass(),
+    UNativeWebWebSocketServerBase::StaticClass(),
+    UNativeWebWebSocketClientBase::StaticClass(),
     server);
 
-if (createResult.Result == ECefWebSocketCreateResult::Failed || !server)
+if (createResult.Result == ENativeWebWebSocketCreateResult::Failed || !server)
 {
     return;
 }
@@ -63,10 +63,10 @@ server->BroadcastString(TEXT("server-online"));
 ```
 
 ## Developer Control
-`UCefWebSocketServerBase` runtime controls:
-- `SetPayloadFormat(ECefWebSocketPayloadFormat)`
-- `SetPipelineConfig(const FCefWebSocketPipelineConfig&)`
-- `SetPacketCodec(const TSharedPtr<ICefWebSocketPacketCodec>&)` (C++ only)
+`UNativeWebWebSocketServerBase` runtime controls:
+- `SetPayloadFormat(ENativeWebWebSocketPayloadFormat)`
+- `SetPipelineConfig(const FNativeWebWebSocketPipelineConfig&)`
+- `SetPacketCodec(const TSharedPtr<INativeWebWebSocketPacketCodec>&)` (C++ only)
 
 Built-in payload formats:
 - `Binary`
@@ -76,15 +76,15 @@ Built-in payload formats:
 - `Custom` (use custom codec)
 
 Custom codec contract:
-- Implement `ICefWebSocketPacketCodec`
+- Implement `INativeWebWebSocketPacketCodec`
 - `DecodeInbound(...)`
 - `EncodeSendRequest(...)`
 
 ## Subclassing
-- Derive server from `UCefWebSocketServerBase`:
+- Derive server from `UNativeWebWebSocketServerBase`:
   - override `HandleClientBytes(...)`
   - override `HandleClientString(...)`
-- Derive client from `UCefWebSocketClientBase`:
+- Derive client from `UNativeWebWebSocketClientBase`:
   - override `HandleBytesFromClient(...)`
   - override `HandleStringFromClient(...)`
 

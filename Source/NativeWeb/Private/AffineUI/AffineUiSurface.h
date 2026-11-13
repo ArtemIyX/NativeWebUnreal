@@ -72,6 +72,37 @@ struct NATIVEWEB_API FAffineUiMutation
 	FString Value;
 };
 
+/** Keeps an unconsumed draw batch ahead of newer mutations when a draw is deferred. */
+struct NATIVEWEB_API FAffineUiDeferredMutationBatch
+{
+	void Begin(TArray<FAffineUiMutation>&& Mutations, uint64 InDocumentEpoch)
+	{
+		InFlight = MoveTemp(Mutations);
+		DocumentEpoch = InDocumentEpoch;
+	}
+
+	void RestoreIfDeferred(uint64 CurrentDocumentEpoch, TArray<FAffineUiMutation>& Pending)
+	{
+		if (DocumentEpoch == CurrentDocumentEpoch && !InFlight.IsEmpty())
+		{
+			InFlight.Append(MoveTemp(Pending));
+			Pending = MoveTemp(InFlight);
+		}
+		InFlight.Reset();
+	}
+
+	void MarkConsumed()
+	{
+		InFlight.Reset();
+	}
+
+	const TArray<FAffineUiMutation>& GetInFlight() const { return InFlight; }
+
+private:
+	TArray<FAffineUiMutation> InFlight;
+	uint64 DocumentEpoch = 0;
+};
+
 enum class EAffineUiInputKind : uint8
 	/**
 	 * @brief Defines the nativeweb api data structure.

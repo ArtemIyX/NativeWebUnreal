@@ -15,7 +15,8 @@
 #include "Data/Structs/NativeWebError.h"
 #include "Data/Structs/NativeWebInputEvent.h"
 #include "Data/Structs/NativeWebMessage.h"
-#include "Data/Structs/NativeWebViewOptions.h"
+#include "Data/Structs/NativeWebPresentationConfig.h"
+#include "Data/Structs/NativeWebSurfaceConfig.h"
 #include "NativeWebDelegates.h"
 #include "NativeWebView.generated.h"
 
@@ -405,7 +406,11 @@ private:
 	/**
 	 * @brief Initializes the owning subsystem or runtime object.
 	* @param InName Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
-	* @param Options Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+	 * @param Html HTML source for the document.
+	 * @param Css CSS source paired with the document.
+	 * @param PackagedAssetRoot Optional normalized project-Content-relative asset root.
+	 * @param SurfaceConfig Initial AffineUI surface configuration.
+	 * @param PresentationConfig Initial presenter configuration.
 	* @param Player Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
 	 * @param OutError Output value populated by this operation when applicable.
 	 * @return True when the operation succeeds or accepts the request; false when it fails or rejects it.
@@ -413,10 +418,12 @@ private:
 	 * @par Example
 	 * Invocation example; substitute arguments that satisfy the function contract.
 	 * @code{.cpp}
-	 * Initialize(InName, Options, Player, OutError);
+	 * Initialize(InName, Html, Css, PackagedAssetRoot, SurfaceConfig, PresentationConfig, Player, OutError);
 	 * @endcode
 	 */
-	bool Initialize(FName InName, const FNativeWebViewOptions& Options, ULocalPlayer* Player,
+	bool Initialize(FName InName, const FString& Html, const FString& Css, const FString& InPackagedAssetRoot,
+	                const FNativeWebSurfaceConfig& SurfaceConfig,
+	                const FNativeWebPresentationConfig& PresentationConfig, ULocalPlayer* Player,
 	                FNativeWebError& OutError);
 	bool StartRequestedPresenter(FNativeWebError& OutError);
 	bool StartSlatePresenter(FNativeWebError& OutError);

@@ -16,6 +16,14 @@ class UTextureRenderTarget2D;
 class FNativeWebGpuPresenter final
 {
 public:
+	/** @brief Returns whether the scene format/output device has the supported opaque SDR contract. */
+	static bool IsSupportedSceneTarget(EPixelFormat SceneFormat, EDisplayOutputFormat OutputFormat,
+	                                  EDisplayColorGamut ColorGamut)
+	{
+		return (SceneFormat == PF_B8G8R8A8 || SceneFormat == PF_R8G8B8A8 || SceneFormat == PF_A2B10G10R10) &&
+		       OutputFormat == EDisplayOutputFormat::SDR_sRGB && ColorGamut == EDisplayColorGamut::sRGB_D65;
+	}
+
 	/** @brief Converts viewport pixels into normalized coordinates for a nonempty view rectangle. */
 	static bool ConvertViewportPoint(const FVector2D& ViewportPixel, const FIntRect& ViewRect,
 	                                 FVector2D& OutNormalized, bool bAllowOutside = false)

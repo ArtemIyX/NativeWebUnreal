@@ -20,5 +20,14 @@ float4 ViewRect;
 float4 MainPS(FVertexOutput Input) : SV_Target0
 {
 	float2 ViewUv = (Input.Position.xy - ViewRect.xy) / ViewRect.zw;
-	return WebTexture.Sample(WebSampler, ViewUv);
+	float4 Web = WebTexture.Sample(WebSampler, ViewUv);
+	// AffineUI is stored as sRGB BGRA8 and the UE scene attachment is a
+	// non-sRGB SDR target. The SRV lookup has already decoded Web.rgb to
+	// linear, so encode it for the SDR target. Presentation is intentionally
+	// opaque; the surface contract requires an opaque clear color.
+	float3 Encoded = saturate(Web.rgb);
+	Encoded = select(Encoded > 0.0031308,
+	                 1.055 * pow(Encoded, 1.0 / 2.4) - 0.055,
+	                 12.92 * Encoded);
+	return float4(Encoded, 1.0);
 }

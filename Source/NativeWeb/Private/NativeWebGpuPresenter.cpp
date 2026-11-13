@@ -171,6 +171,14 @@ public:
 					TEXT("The GPU presenter currently supports SDR output only.");
 			return;
 		}
+		if (View.Family->RenderTarget->GetDisplayOutputFormat() != EDisplayOutputFormat::SDR_sRGB ||
+			View.Family->RenderTarget->GetDisplayColorGamut() != EDisplayColorGamut::sRGB_D65)
+		{
+			FScopeLock Lock(&State->Mutex);
+			if (State->Failure.IsEmpty())
+				State->Failure = TEXT("The GPU presenter supports only sRGB-D65 SDR output; other SDR output devices use Slate fallback.");
+			return;
+		}
 		const FTextureRHIRef SceneTexture = View.Family->RenderTarget->GetRenderTargetTexture();
 		if (!SceneTexture.IsValid())
 		{
@@ -179,13 +187,30 @@ public:
 			return;
 		}
 		const EPixelFormat SceneFormat = SceneTexture->GetFormat();
-		if (SceneFormat != PF_B8G8R8A8 && SceneFormat != PF_R8G8B8A8)
+		if (!FNativeWebGpuPresenter::IsSupportedSceneTarget(SceneFormat,
+			View.Family->RenderTarget->GetDisplayOutputFormat(),
+			View.Family->RenderTarget->GetDisplayColorGamut()))
 		{
 			FScopeLock Lock(&State->Mutex);
 			if (State->Failure.IsEmpty())
 				State->Failure = FString::Printf(
-					TEXT("The scene target format %s is unsupported; GPU presentation requires 8-bit SDR RGBA."),
+					TEXT("The scene target format %s or SDR output encoding is unsupported; GPU presentation requires opaque sRGB SDR."),
 					GPixelFormats[SceneFormat].Name);
+			return;
+		}
+		const FRHITextureDesc& SceneDesc = SceneTexture->GetDesc();
+		const FIntPoint SceneExtent(SceneDesc.Extent.X, SceneDesc.Extent.Y);
+		const FIntRect ViewRect = View.UnscaledViewRect;
+		if (SceneDesc.Dimension != ETextureDimension::Texture2D || SceneDesc.ArraySize != 1 ||
+			SceneDesc.NumMips != 1 || SceneDesc.NumSamples != 1 ||
+			!EnumHasAllFlags(SceneDesc.Flags, ETextureCreateFlags::RenderTargetable) ||
+			!EnumHasAllFlags(SceneDesc.Flags, ETextureCreateFlags::ShaderResource) ||
+			ViewRect.Min.X < 0 || ViewRect.Min.Y < 0 || ViewRect.Max.X > SceneExtent.X ||
+			ViewRect.Max.Y > SceneExtent.Y)
+		{
+			FScopeLock Lock(&State->Mutex);
+			if (State->Failure.IsEmpty())
+				State->Failure = TEXT("The scene target is not a compatible single-sample 2D renderable attachment for GPU presentation.");
 			return;
 		}
 		FTextureRHIRef WebTexture;
@@ -193,6 +218,16 @@ public:
 			FScopeLock Lock(&State->Mutex);
 			if (!State->Texture.IsValid()) return;
 			WebTexture = State->Texture;
+			const FRHITextureDesc& WebDesc = WebTexture->GetDesc();
+			if (WebDesc.Format != PF_B8G8R8A8 || WebDesc.Dimension != ETextureDimension::Texture2D ||
+				WebDesc.ArraySize != 1 || WebDesc.NumMips != 1 || WebDesc.NumSamples != 1 ||
+				!EnumHasAllFlags(WebDesc.Flags, ETextureCreateFlags::ShaderResource) ||
+				!EnumHasAnyFlags(WebDesc.Flags, ETextureCreateFlags::SRGB))
+			{
+				if (State->Failure.IsEmpty())
+					State->Failure = TEXT("The AffineUI output is not a single-sample sRGB BGRA8 shader resource.");
+				return;
+			}
 			if (!State->bEnabled)
 			{
 				State->bReady = true;
@@ -240,17 +275,21 @@ public:
 			ReleaseInput(SlateApp);
 			return;
 		}
-		if (!SlateApp.IsActive() || !HasViewportFocus(SlateApp))
+		if (!SlateApp.IsActive())
 		{
 			ReleaseInput(SlateApp);
 			return;
 		}
 		UpdateSurfaceSize();
+		if (!HasViewportFocus(SlateApp))
+		{
+			ReleaseInput(SlateApp);
+		}
 	}
 
 	virtual bool HandleMouseMoveEvent(FSlateApplication& SlateApp, const FPointerEvent& Event) override
 	{
-		if (!bEnabled || !IsTargetWindow(SlateApp, Event.GetWindow())) return false;
+		if (!bEnabled || !IsTargetWindow(SlateApp, Event)) return false;
 		if (bPointerPressed)
 		{
 			MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_POINTER_MOVE,
@@ -279,7 +318,7 @@ public:
 	virtual bool HandleMouseButtonDownEvent(FSlateApplication& SlateApp, const FPointerEvent& Event) override
 	{
 		if (!bEnabled || Event.GetEffectingButton() != EKeys::LeftMouseButton ||
-			!IsTargetWindow(SlateApp, Event.GetWindow()) || !IsViewportHit(SlateApp, Event.GetScreenSpacePosition()))
+			!IsTargetWindow(SlateApp, Event) || !IsViewportHit(SlateApp, Event.GetScreenSpacePosition()))
 			return false;
 		if (!MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_POINTER_DOWN,
 		               0.0f, Event.IsShiftDown(), SlateApp))
@@ -289,7 +328,8 @@ public:
 		if (TSharedPtr<SViewport> Widget = ViewportWidget.Pin())
 		{
 			SlateApp.SetKeyboardFocus(Widget, EFocusCause::Mouse);
-			SlateApp.GetPlatformApplication()->SetCapture(Event.GetWindow()->GetNativeWindow());
+			if (const TSharedPtr<SWindow> GameWindow = GetViewportWindow(SlateApp))
+				SlateApp.GetPlatformApplication()->SetCapture(GameWindow->GetNativeWindow());
 		}
 		SetFocus(true);
 		return true;
@@ -303,7 +343,7 @@ public:
 	virtual bool HandleMouseButtonUpEvent(FSlateApplication& SlateApp, const FPointerEvent& Event) override
 	{
 		if (!bEnabled || !bPointerPressed || Event.GetEffectingButton() != EKeys::LeftMouseButton ||
-			!IsTargetWindow(SlateApp, Event.GetWindow()))
+			!IsTargetWindow(SlateApp, Event))
 			return false;
 		MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_POINTER_UP,
 		          0.0f, Event.IsShiftDown(), SlateApp, true);
@@ -316,7 +356,7 @@ public:
 	virtual bool HandleMouseWheelOrGestureEvent(FSlateApplication& SlateApp, const FPointerEvent& Event,
 	                                            const FPointerEvent*) override
 	{
-		if (!bEnabled || !IsTargetWindow(SlateApp, Event.GetWindow()) ||
+		if (!bEnabled || !IsTargetWindow(SlateApp, Event) ||
 			!IsViewportHit(SlateApp, Event.GetScreenSpacePosition()))
 			return false;
 		return MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_WHEEL,
@@ -361,13 +401,29 @@ private:
 		return true;
 	}
 
-	bool IsTargetWindow(FSlateApplication& SlateApp, const TSharedRef<SWindow>& Window) const
+	TSharedPtr<SWindow> GetViewportWindow(FSlateApplication& SlateApp) const
 	{
 		const TSharedPtr<SViewport> Widget = ViewportWidget.Pin();
-		const TSharedPtr<SWindow> GameWindow = Widget.IsValid()
+		return Widget.IsValid()
 			                                       ? SlateApp.FindWidgetWindow(Widget.ToSharedRef())
 			                                       : nullptr;
-		return GameWindow.IsValid() && GameWindow == Window;
+	}
+
+	bool IsTargetWindow(FSlateApplication& SlateApp, const FInputEvent& Event) const
+	{
+		const TSharedPtr<SWindow> GameWindow = GetViewportWindow(SlateApp);
+		if (!GameWindow.IsValid()) return false;
+
+		// FInputEvent::GetWindow() unconditionally dereferences EventPath. Raw
+		// platform mouse moves may not carry a path, so never call it directly.
+		if (const FWidgetPath* EventPath = Event.GetEventPath())
+		{
+			if (!EventPath->IsValid()) return false;
+			const TSharedRef<SWindow> EventWindow = EventPath->GetWindow();
+			return &EventWindow.Get() == GameWindow.Get();
+		}
+
+		return SlateApp.GetActiveTopLevelWindow() == GameWindow;
 	}
 
 	bool IsViewportHit(FSlateApplication& SlateApp, const FVector2D& ScreenPosition) const

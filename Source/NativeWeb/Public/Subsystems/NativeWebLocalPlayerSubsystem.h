@@ -11,6 +11,8 @@
 #include "Containers/Ticker.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
 #include "NativeWebView.h"
+#include "Data/Structs/NativeWebPresentationConfig.h"
+#include "Data/Structs/NativeWebSurfaceConfig.h"
 #include "NativeWebLocalPlayerSubsystem.generated.h"
 
 /**
@@ -55,15 +57,17 @@ public:
 	 * @brief Creates and registers a view from a packaged project Content directory.
 	 * @param Name Unique view name within this local-player subsystem; duplicate live names are rejected.
 	 * @param ContentRelativeDirectory Project-Content-relative package directory containing ui.css and ui.js.
+	 * @param SurfaceConfig Initial AffineUI surface dimensions, DPI, and clear color.
+	 * @param PresentationConfig Built-in presenter, fallback, and Slate z-order settings.
 	 * @param OutError Receives a structured failure reason, including platform or occupied surface capacity.
 	 * @return The initialized view, or nullptr if validation, file loading, runtime creation, or capacity checks fail.
 	 * @details Generates a small HTML shell containing #app; the package does not need index.html. Optional fonts may be placed in a fonts subdirectory.
 	 * @note Game-thread only. Packaged file resolution occurs before render-lane work.
-	 * @see CreateView, FNativeWebViewOptions
+	 * @see CreateInlineView, FNativeWebSurfaceConfig, FNativeWebPresentationConfig
 	 * @par Example
 	 * Invocation example; substitute arguments that satisfy the function contract.
 	 * @code{.cpp}
-	 * CreatePackagedView(Name, ContentRelativeDirectory, OutError);
+	 * CreatePackagedView(Name, ContentRelativeDirectory, SurfaceConfig, PresentationConfig, OutError);
 	 * @endcode
 	 */
 
@@ -71,40 +75,30 @@ public:
 	UNativeWebView* CreatePackagedView(
 		FName Name,
 		const FString& ContentRelativeDirectory,
+		const FNativeWebSurfaceConfig& SurfaceConfig,
+		const FNativeWebPresentationConfig& PresentationConfig,
 		FNativeWebError& OutError);
 
 	/**
-	 * @brief Creates a packaged view using explicit size, presentation, fallback, and attachment options.
-	 * @param Name Unique view name in this local-player subsystem.
-	 * @param ContentRelativeDirectory Project-Content-relative directory containing ui.css and ui.js.
-	 * @param Options Presentation mode, fallback policy, size, clear color, and attachment settings; document contents are loaded from the package.
+	 * @brief Creates and registers a view from caller-provided inline HTML and CSS.
+	 * @param Name Unique view name within this local-player subsystem.
+	 * @param Html HTML source for the document.
+	 * @param Css CSS source paired with the document.
+	 * @param SurfaceConfig Initial AffineUI surface dimensions, DPI, and clear color.
+	 * @param PresentationConfig Built-in presenter, fallback, and Slate z-order settings.
 	 * @param OutError Receives a structured failure reason.
-	 * @return The initialized view, or nullptr when view or content initialization fails.
-	 * @details The legacy overload selects GPU viewport presentation by default and automatically attaches the requested mode.
-	 * @note Game-thread only. GPU presentation may still be pending when this function returns.
-	 */
-	UFUNCTION(BlueprintCallable, Category="NativeWeb")
-	UNativeWebView* CreatePackagedViewWithOptions(FName Name, const FString& ContentRelativeDirectory,
-	                                              const FNativeWebViewOptions& Options, FNativeWebError& OutError);
-
-	/**
-	 * @brief Creates and registers a view from inline document and runtime options.
-	 * @param Name Unique view name within this local-player subsystem; duplicate live names are rejected.
-	 * @param Options Pixel size, DPI, clear color, viewport behavior, inline HTML/CSS, and optional packaged asset root.
-	 * @param OutError Receives a structured failure reason.
-	 * @return The initialized view, or nullptr if validation, platform, runtime, or one-live-surface capacity checks fail.
-	 * @details The initial implementation supports one live AffineUI surface per process; close it before creating another view.
+	 * @return The initialized view, or nullptr if validation, runtime creation, or surface capacity checks fail.
+	 * @details Inline startup JavaScript remains explicit through UNativeWebView::EvaluateScript.
 	 * @note Game-thread only. The subsystem owns and ticks the returned UObject.
-	 * @see CreatePackagedView, FNativeWebViewOptions
-	 * @par Example
-	 * Invocation example; substitute arguments that satisfy the function contract.
-	 * @code{.cpp}
-	 * CreateView(Name, Options, OutError);
-	 * @endcode
 	 */
-
 	UFUNCTION(BlueprintCallable, Category="NativeWeb")
-	UNativeWebView* CreateView(FName Name, const FNativeWebViewOptions& Options, FNativeWebError& OutError);
+	UNativeWebView* CreateInlineView(
+		FName Name,
+		const FString& Html,
+		const FString& Css,
+		const FNativeWebSurfaceConfig& SurfaceConfig,
+		const FNativeWebPresentationConfig& PresentationConfig,
+		FNativeWebError& OutError);
 
 	/**
 	 * @brief Looks up an open view by its subsystem-local name.
@@ -139,22 +133,15 @@ public:
 	bool DestroyView(FName Name);
 
 private:
+	UNativeWebView* CreateConfiguredView(FName Name, const FString& Html, const FString& Css,
+	                                     const FString& PackagedAssetRoot,
+	                                     const FNativeWebSurfaceConfig& SurfaceConfig,
+	                                     const FNativeWebPresentationConfig& PresentationConfig,
+	                                     FNativeWebError& OutError);
+
 	UPROPERTY(Transient)
 	/** @brief Reflected data field `Views`. */
 	TMap<FName, TObjectPtr<UNativeWebView>> Views;
 	FTSTicker::FDelegateHandle TickHandle;
-	/**
-	 * @brief Advances each owned view's queued messages and bounded QuickJS job work.
-	 * @details Called by the engine ticker on the game thread. Returning false unregisters this ticker callback.
-	 * @param DeltaTime Elapsed time supplied by the engine ticker.
-	 * @return True when the operation succeeds or accepts the request; false when it fails or rejects it.
-	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
-	 * @par Example
-	 * Invocation example; substitute arguments that satisfy the function contract.
-	 * @code{.cpp}
-	 * Tick(DeltaTime);
-	 * @endcode
-	 */
-
 	bool Tick(float DeltaTime);
 };

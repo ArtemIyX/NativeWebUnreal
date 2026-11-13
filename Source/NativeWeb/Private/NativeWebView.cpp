@@ -54,18 +54,21 @@ namespace
 	}
 }
 
-bool UNativeWebView::Initialize(FName InName, const FNativeWebViewOptions& Options, ULocalPlayer* Player,
+bool UNativeWebView::Initialize(FName InName, const FString& Html, const FString& Css,
+                                const FString& InPackagedAssetRoot,
+                                const FNativeWebSurfaceConfig& SurfaceConfig,
+                                const FNativeWebPresentationConfig& PresentationConfig, ULocalPlayer* Player,
                                 FNativeWebError& OutError)
 {
 	check(IsInGameThread());
 	UE_LOG(LogNativeWebView, Log, TEXT("Initializing view '%s' (size=%dx%d, dpi=%.2f)."),
-	       *InName.ToString(), Options.PixelSize.X, Options.PixelSize.Y, Options.DpiScale);
+	       *InName.ToString(), SurfaceConfig.PixelSize.X, SurfaceConfig.PixelSize.Y, SurfaceConfig.DpiScale);
 	ViewName = InName;
-	RequestedPresentationMode = Options.PresentationMode;
-	bAllowPresentationFallback = Options.bFallbackToSlate;
-	SlateZOrder = Options.ViewportZOrder;
+	RequestedPresentationMode = PresentationConfig.PresentationMode;
+	bAllowPresentationFallback = PresentationConfig.bFallbackToSlate;
+	SlateZOrder = PresentationConfig.ViewportZOrder;
 	OwningPlayer = Player;
-	PackagedAssetRoot = Options.PackagedAssetRoot;
+	PackagedAssetRoot = InPackagedAssetRoot;
 #if !PLATFORM_WINDOWS
 	OutError = BuildNativeWebError(TEXT("UnsupportedPlatform"), TEXT("NativeWeb views require Win64 D3D11."), ViewName);
 	UE_LOG(LogNativeWebView, Error, TEXT("View '%s' initialization rejected: %s"), *ViewName.ToString(),
@@ -73,13 +76,12 @@ bool UNativeWebView::Initialize(FName InName, const FNativeWebViewOptions& Optio
 	return false;
 #else
 	FAffineUiSurfaceDesc Desc;
-	Desc.PixelSize = Options.PixelSize;
-	Desc.DpiScale = Options.DpiScale;
-	Desc.ClearColor = Options.ClearColor;
-	Desc.Content.Html = Options.Html;
-	Desc.Content.Css = Options.Css;
-	if (!Options.PackagedAssetRoot.IsEmpty())
-		Desc.FontDirectory = FPaths::Combine(Options.PackagedAssetRoot, TEXT("fonts"));
+	Desc.PixelSize = SurfaceConfig.PixelSize;
+	Desc.DpiScale = SurfaceConfig.DpiScale;
+	Desc.ClearColor = SurfaceConfig.ClearColor;
+	Desc.Content.Html = Html;
+	Desc.Content.Css = Css;
+	if (!PackagedAssetRoot.IsEmpty()) Desc.FontDirectory = FPaths::Combine(PackagedAssetRoot, TEXT("fonts"));
 	FString ErrorMessage;
 	Script = FAffineUiScriptInstance::Create(Desc, ErrorMessage);
 	if (!Script)

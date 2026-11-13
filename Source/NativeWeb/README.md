@@ -84,9 +84,11 @@ void UMyHudOwner::StartNativeWeb(ULocalPlayer* LocalPlayer)
         return;
     }
 
+    FNativeWebSurfaceConfig Surface;
+    FNativeWebPresentationConfig Presentation;
     FNativeWebError Error;
     HudView = NativeWeb->CreatePackagedView(
-        FName(TEXT("Hud")), TEXT("NativeWeb/Hud"), Error);
+        FName(TEXT("Hud")), TEXT("NativeWeb/Hud"), Surface, Presentation, Error);
     if (!HudView)
     {
         UE_LOG(LogNativeWebSubsystem, Error, TEXT("View creation failed (%s): %s"),
@@ -106,32 +108,32 @@ unregisters it.
 
 ## Inline view workflow
 
-Use `CreateView` when the document and stylesheet are already available as
-strings or when the view needs custom options:
+Use `CreateInlineView` when the document and stylesheet are already available
+as strings:
 
 ```cpp
-FNativeWebViewOptions Options;
-Options.PixelSize = FIntPoint(1280, 720);
-Options.DpiScale = 1.0f;
-Options.Html = TEXT("<html><body><main id=\"app\"></main></body></html>");
-Options.Css = TEXT("html, body { margin: 0; width: 100%; height: 100%; }");
-Options.ViewportZOrder = 10;
-Options.PresentationMode = ENativeWebPresentationMode::GpuViewport;
-Options.bFallbackToSlate = true;
+FNativeWebSurfaceConfig Surface;
+Surface.PixelSize = FIntPoint(1280, 720);
+
+FNativeWebPresentationConfig Presentation;
+Presentation.ViewportZOrder = 10;
 
 FNativeWebError Error;
-UNativeWebView* View = NativeWeb->CreateView(FName(TEXT("Menu")), Options, Error);
+UNativeWebView* View = NativeWeb->CreateInlineView(
+    FName(TEXT("Menu")),
+    TEXT("<html><body><main id=\"app\"></main></body></html>"),
+    TEXT("html, body { margin: 0; width: 100%; height: 100%; }"),
+    Surface, Presentation, Error);
 ```
 
-`FNativeWebViewOptions` also contains `ClearColor` and an optional
-`PackagedAssetRoot`. The latter is a project-Content-relative directory used
-for packaged document assets and its `fonts` subdirectory. To load a document
-after creation, call `LoadPackagedDocument` with normalized paths relative to
-that root. To execute a separate script, call `EvaluatePackagedScript`.
+Inline startup JavaScript remains explicit: call `EvaluateScript` after
+creation. Packaged views use the fixed `ui.css` and `ui.js` filenames and may
+place fonts in a `fonts` subdirectory; callers pass only the folder relative
+to the project's `Content` directory.
 
 ## View lifecycle and presentation
 
-- `CreatePackagedView` and `CreateView` create the view and register it with
+- `CreatePackagedView` and `CreateInlineView` create the view and register it with
   the owning local-player subsystem. Creation fails for an empty/duplicate
   name, invalid content path/options, unsupported renderer, or occupied
   single-surface capacity.
@@ -178,11 +180,24 @@ that root. To execute a separate script, call `EvaluatePackagedScript`.
   releases view-owned focus/capture, invalidates callbacks, and tears down the
   runtime. `DestroyView` additionally removes the view from the subsystem map.
 
-The GPU path currently supports Win64, D3D11, one live AffineUI surface,
-opaque SDR output, non-stereo viewports, and the existing NativeWeb input set.
-HDR, transparent output, direct AffineUI rendering to the viewport, and
-arbitrary Slate interleaving are outside this implementation. No performance
-improvement is claimed.
+The GPU path currently supports Win64, D3D11, one live AffineUI surface, and
+non-stereo viewports whose scene target is PF_B8G8R8A8, PF_R8G8B8A8, or
+PF_A2B10G10R10. The supported output device is opaque `SDR_sRGB` with the
+sRGB-D65 gamut. AffineUI creates a single-sample BGRA8 sRGB texture: its
+shader-resource view decodes RGB to linear, and the GPU presenter explicitly
+encodes RGB back to sRGB for UE's non-sRGB scene attachment. Alpha is forced to
+1.0; the surface rejects non-opaque clear colors, and transparent presentation
+is unsupported. The scene target must be a single-sample 2D renderable/shader
+resource, and the view rectangle must fit within it.
+
+HDR, Rec.709, explicit-gamma and other output-device configurations, invalid
+or unsupported target attachments, transparent output, direct AffineUI
+rendering to the viewport, and arbitrary Slate interleaving use the controlled
+Slate fallback. The 10-bit target is therefore supported only as SDR when the
+output-device contract above is true; changing to an 8-bit target alone does
+not change color encoding. GPU content belongs to the scene viewport and
+Slate/UMG renders above it; GPU presentation has no arbitrary Slate z-order.
+No performance improvement is claimed.
 
 ## Local GPU presenter validation (UE 5.7)
 

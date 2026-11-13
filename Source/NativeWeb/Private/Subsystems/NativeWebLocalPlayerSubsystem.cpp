@@ -1,5 +1,3 @@
-
-
 #include "Subsystems/NativeWebLocalPlayerSubsystem.h"
 
 #include "Misc/FileHelper.h"
@@ -9,8 +7,6 @@
 
 namespace
 {
-
-
 	bool ResolveProjectContentDirectory(const FString& RelativeDirectory, FString& OutDirectory)
 	{
 		if (RelativeDirectory.IsEmpty() || !FPaths::IsRelative(RelativeDirectory)) return false;
@@ -61,16 +57,9 @@ void UNativeWebLocalPlayerSubsystem::Deinitialize()
 	UE_LOG(LogNativeWebSubsystem, Verbose, TEXT("NativeWeb local-player subsystem shutdown complete."));
 }
 
-UNativeWebView* UNativeWebLocalPlayerSubsystem::CreatePackagedView(FName Name, const FString& ContentRelativeDirectory,
-                                                                   FNativeWebError& OutError)
-{
-	FNativeWebViewOptions Options;
-	return CreatePackagedViewWithOptions(Name, ContentRelativeDirectory, Options, OutError);
-}
-
-UNativeWebView* UNativeWebLocalPlayerSubsystem::CreatePackagedViewWithOptions(
-	FName Name, const FString& ContentRelativeDirectory, const FNativeWebViewOptions& ViewOptions,
-	FNativeWebError& OutError)
+UNativeWebView* UNativeWebLocalPlayerSubsystem::CreatePackagedView(
+	FName Name, const FString& ContentRelativeDirectory, const FNativeWebSurfaceConfig& SurfaceConfig,
+	const FNativeWebPresentationConfig& PresentationConfig, FNativeWebError& OutError)
 {
 	check(IsInGameThread());
 	OutError = {};
@@ -113,12 +102,8 @@ UNativeWebView* UNativeWebLocalPlayerSubsystem::CreatePackagedViewWithOptions(
 		return nullptr;
 	}
 
-	FNativeWebViewOptions Options = ViewOptions;
-	Options.Html = TEXT("<html><body><div id=\"app\"></div></body></html>");
-	Options.Css = MoveTemp(Css);
-	Options.PackagedAssetRoot = AssetRoot;
-
-	UNativeWebView* View = CreateView(Name, Options, OutError);
+	UNativeWebView* View = CreateConfiguredView(Name, TEXT("<html><body><div id=\"app\"></div></body></html>"),
+	                                            Css, AssetRoot, SurfaceConfig, PresentationConfig, OutError);
 	if (!View)
 	{
 		UE_LOG(LogNativeWebSubsystem, Error,
@@ -143,14 +128,24 @@ UNativeWebView* UNativeWebLocalPlayerSubsystem::CreatePackagedViewWithOptions(
 	return View;
 }
 
-UNativeWebView* UNativeWebLocalPlayerSubsystem::CreateView(FName Name, const FNativeWebViewOptions& Options,
-                                                           FNativeWebError& OutError)
+UNativeWebView* UNativeWebLocalPlayerSubsystem::CreateInlineView(
+	FName Name, const FString& Html, const FString& Css, const FNativeWebSurfaceConfig& SurfaceConfig,
+	const FNativeWebPresentationConfig& PresentationConfig, FNativeWebError& OutError)
+{
+	return CreateConfiguredView(Name, Html, Css, FString(), SurfaceConfig, PresentationConfig, OutError);
+}
+
+UNativeWebView* UNativeWebLocalPlayerSubsystem::CreateConfiguredView(
+	FName Name, const FString& Html, const FString& Css, const FString& PackagedAssetRoot,
+	const FNativeWebSurfaceConfig& SurfaceConfig, const FNativeWebPresentationConfig& PresentationConfig,
+	FNativeWebError& OutError)
 {
 	check(IsInGameThread());
 	OutError = {};
 	UE_LOG(LogNativeWebSubsystem, Verbose,
 	       TEXT("Creating NativeWeb view '%s' (size=%dx%d, presentation=%s)."), *Name.ToString(),
-	       Options.PixelSize.X, Options.PixelSize.Y, *UEnum::GetValueAsString(Options.PresentationMode));
+	       SurfaceConfig.PixelSize.X, SurfaceConfig.PixelSize.Y,
+	       *UEnum::GetValueAsString(PresentationConfig.PresentationMode));
 	if (Name.IsNone())
 	{
 		OutError.Code = TEXT("InvalidName");
@@ -166,8 +161,24 @@ UNativeWebView* UNativeWebLocalPlayerSubsystem::CreateView(FName Name, const FNa
 		UE_LOG(LogNativeWebSubsystem, Error, TEXT("View creation failed: %s"), *OutError.Message);
 		return nullptr;
 	}
+	const bool bValidSurface = SurfaceConfig.PixelSize.X > 0 && SurfaceConfig.PixelSize.Y > 0 &&
+		SurfaceConfig.PixelSize.X <= 4096 && SurfaceConfig.PixelSize.Y <= 4096 &&
+		FMath::IsFinite(SurfaceConfig.DpiScale) && SurfaceConfig.DpiScale > 0.0f &&
+		SurfaceConfig.DpiScale <= 8.0f && SurfaceConfig.ClearColor.A == 255;
+	const bool bValidPresentation = PresentationConfig.PresentationMode == ENativeWebPresentationMode::GpuViewport ||
+		PresentationConfig.PresentationMode == ENativeWebPresentationMode::Slate ||
+		PresentationConfig.PresentationMode == ENativeWebPresentationMode::None;
+	if (!bValidSurface || !bValidPresentation)
+	{
+		OutError.Code = TEXT("InvalidOptions");
+		OutError.Message = TEXT("Invalid NativeWeb surface or presentation configuration.");
+		OutError.ViewName = Name;
+		UE_LOG(LogNativeWebSubsystem, Error, TEXT("View creation failed: %s"), *OutError.Message);
+		return nullptr;
+	}
 	UNativeWebView* View = NewObject<UNativeWebView>(this);
-	if (!View->Initialize(Name, Options, GetLocalPlayer(), OutError))
+	if (!View->Initialize(Name, Html, Css, PackagedAssetRoot, SurfaceConfig, PresentationConfig, GetLocalPlayer(),
+	                      OutError))
 	{
 		UE_LOG(LogNativeWebSubsystem, Error, TEXT("View '%s' initialization failed (code=%s): %s"),
 		       *Name.ToString(), *OutError.Code.ToString(), *OutError.Message);

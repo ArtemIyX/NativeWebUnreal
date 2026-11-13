@@ -1,6 +1,28 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "NativeWebGpuPresenter.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebGpuTargetContractTest,
+	"NativeWeb.Presentation.GpuTargetContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FNativeWebGpuTargetContractTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	TestTrue(TEXT("10-bit sRGB SDR scene targets are supported"),
+	         FNativeWebGpuPresenter::IsSupportedSceneTarget(PF_A2B10G10R10,
+	             EDisplayOutputFormat::SDR_sRGB, EDisplayColorGamut::sRGB_D65));
+	TestTrue(TEXT("8-bit BGRA sRGB SDR scene targets are supported"),
+	         FNativeWebGpuPresenter::IsSupportedSceneTarget(PF_B8G8R8A8,
+	             EDisplayOutputFormat::SDR_sRGB, EDisplayColorGamut::sRGB_D65));
+	TestFalse(TEXT("HDR output is rejected"),
+	          FNativeWebGpuPresenter::IsSupportedSceneTarget(PF_A2B10G10R10,
+	              EDisplayOutputFormat::HDR_ACES_1000nit_ST2084, EDisplayColorGamut::Rec2020_D65));
+	TestFalse(TEXT("Non-sRGB SDR output is rejected"),
+	          FNativeWebGpuPresenter::IsSupportedSceneTarget(PF_A2B10G10R10,
+	              EDisplayOutputFormat::SDR_ExplicitGammaMapping, EDisplayColorGamut::sRGB_D65));
+	return true;
+}
 #include "Misc/AutomationTest.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebGpuInputCoordinateTest,

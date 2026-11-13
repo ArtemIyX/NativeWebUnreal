@@ -13,6 +13,7 @@
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
 #include "NativeWeb.h"
+#include "NativeWebInputRouting.h"
 #include "NativeWebView.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
@@ -280,6 +281,11 @@ public:
 			ReleaseInput(SlateApp);
 			return;
 		}
+		if (NativeWebInputRouting::IsConsoleActive(PinnedPlayer))
+		{
+			ReleaseInput(SlateApp);
+			return;
+		}
 		UpdateSurfaceSize();
 		if (!HasViewportFocus(SlateApp))
 		{
@@ -289,7 +295,8 @@ public:
 
 	virtual bool HandleMouseMoveEvent(FSlateApplication& SlateApp, const FPointerEvent& Event) override
 	{
-		if (!bEnabled || !IsTargetWindow(SlateApp, Event)) return false;
+		if (!bEnabled || NativeWebInputRouting::IsConsoleActive(Player.Get()) ||
+			!IsTargetWindow(SlateApp, Event)) return false;
 		if (bPointerPressed)
 		{
 			MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_POINTER_MOVE,
@@ -317,7 +324,8 @@ public:
 
 	virtual bool HandleMouseButtonDownEvent(FSlateApplication& SlateApp, const FPointerEvent& Event) override
 	{
-		if (!bEnabled || Event.GetEffectingButton() != EKeys::LeftMouseButton ||
+		if (!bEnabled || NativeWebInputRouting::IsConsoleActive(Player.Get()) ||
+			Event.GetEffectingButton() != EKeys::LeftMouseButton ||
 			!IsTargetWindow(SlateApp, Event) || !IsViewportHit(SlateApp, Event.GetScreenSpacePosition()))
 			return false;
 		if (!MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_POINTER_DOWN,
@@ -342,7 +350,8 @@ public:
 
 	virtual bool HandleMouseButtonUpEvent(FSlateApplication& SlateApp, const FPointerEvent& Event) override
 	{
-		if (!bEnabled || !bPointerPressed || Event.GetEffectingButton() != EKeys::LeftMouseButton ||
+		if (!bEnabled || NativeWebInputRouting::IsConsoleActive(Player.Get()) || !bPointerPressed ||
+			Event.GetEffectingButton() != EKeys::LeftMouseButton ||
 			!IsTargetWindow(SlateApp, Event))
 			return false;
 		MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_POINTER_UP,
@@ -356,7 +365,8 @@ public:
 	virtual bool HandleMouseWheelOrGestureEvent(FSlateApplication& SlateApp, const FPointerEvent& Event,
 	                                            const FPointerEvent*) override
 	{
-		if (!bEnabled || !IsTargetWindow(SlateApp, Event) ||
+		if (!bEnabled || NativeWebInputRouting::IsConsoleActive(Player.Get()) ||
+			!IsTargetWindow(SlateApp, Event) ||
 			!IsViewportHit(SlateApp, Event.GetScreenSpacePosition()))
 			return false;
 		return MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_WHEEL,
@@ -389,7 +399,8 @@ public:
 private:
 	bool HandleKey(FSlateApplication& SlateApp, const FKeyEvent& Event, ENativeWebInputType Type)
 	{
-		if (!bEnabled || !bFocused || !HasViewportFocus(SlateApp)) return false;
+		if (!bEnabled || NativeWebInputRouting::IsConsoleActive(Player.Get()) || !bFocused ||
+			!HasViewportFocus(SlateApp)) return false;
 		FNativeWebInputEvent Input;
 		Input.Type = Type;
 		Input.bShift = Event.IsShiftDown();

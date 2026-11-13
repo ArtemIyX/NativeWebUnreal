@@ -248,7 +248,7 @@ bool UNativeWebView::StartSlatePresenter(FNativeWebError& OutError)
 		       *ViewName.ToString());
 		return false;
 	}
-	TSharedRef<SNativeWebView> Widget = SNew(SNativeWebView).View(this).Surface(Surface);
+	TSharedRef<SNativeWebView> Widget = SNew(SNativeWebView).View(this).Player(Player).Surface(Surface);
 	Attachment = Widget;
 	Widget->SetVisible(false);
 	Viewport->AddViewportWidgetContent(Widget, SlateZOrder);

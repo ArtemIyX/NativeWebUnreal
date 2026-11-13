@@ -5,6 +5,7 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "InputCoreTypes.h"
 #include "NativeWeb.h"
+#include "NativeWebInputRouting.h"
 #include "NativeWebView.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Widgets/Images/SImage.h"
@@ -12,6 +13,7 @@
 void SNativeWebView::Construct(const FArguments& Args)
 {
 	View = Args._View;
+	Player = Args._Player;
 	Surface = Args._Surface;
 	UNativeWebView* ViewObject = View.Get();
 	UE_LOG(LogNativeWebViewport, Verbose, TEXT("Constructing Slate attachment (view=%s surface=%s)."),
@@ -59,6 +61,11 @@ void SNativeWebView::ReleaseInput()
 void SNativeWebView::Tick(const FGeometry& Geometry, double, float)
 {
 	if (!bVisible) return;
+	if (NativeWebInputRouting::IsConsoleActive(Player.Get()))
+	{
+		if (bPointerPressed || HasKeyboardFocus()) ReleaseInput();
+		return;
+	}
 	const FVector2D LocalSize = Geometry.GetLocalSize();
 	if (LocalSize.X <= 0 || LocalSize.Y <= 0) return;
 	const float Scale = Geometry.GetAccumulatedLayoutTransform().GetScale();
@@ -113,7 +120,7 @@ void SNativeWebView::Forward(const FAffineUiInput& Input) const
 
 bool SNativeWebView::ForwardPointer(EAffineUiInputKind Kind, const FGeometry& Geometry, const FPointerEvent& Event)
 {
-	if (!bVisible) return false;
+	if (!bVisible || NativeWebInputRouting::IsConsoleActive(Player.Get())) return false;
 	const FVector2D Size = Geometry.GetLocalSize();
 	if (Size.X <= 0 || Size.Y <= 0) return false;
 	const FVector2D Local = Geometry.AbsoluteToLocal(Event.GetScreenSpacePosition());
@@ -163,7 +170,8 @@ FReply SNativeWebView::OnMouseWheel(const FGeometry& Geometry, const FPointerEve
 
 void SNativeWebView::OnMouseLeave(const FPointerEvent&)
 {
-	if (!bPointerPressed) Forward({EAffineUiInputKind::MouseMove, FVector2D(-1.0, -1.0)});
+	if (!bPointerPressed && !NativeWebInputRouting::IsConsoleActive(Player.Get()))
+		Forward({EAffineUiInputKind::MouseMove, FVector2D(-1.0, -1.0)});
 }
 
 void SNativeWebView::OnMouseCaptureLost(const FCaptureLostEvent&)
@@ -190,7 +198,7 @@ void SNativeWebView::OnFocusLost(const FFocusEvent&)
 
 FReply SNativeWebView::ForwardKey(EAffineUiInputKind Kind, const FKeyEvent& Event)
 {
-	if (!bVisible) return FReply::Unhandled();
+	if (!bVisible || NativeWebInputRouting::IsConsoleActive(Player.Get())) return FReply::Unhandled();
 	FAffineUiInput Input{Kind};
 	if (Event.GetKey() == EKeys::Tab) Input.Key = EAffineUiInputKey::Tab;
 	else if (Event.GetKey() == EKeys::Enter) Input.Key = EAffineUiInputKey::Enter;

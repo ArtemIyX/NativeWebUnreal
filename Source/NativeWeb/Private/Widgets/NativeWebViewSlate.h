@@ -16,6 +16,7 @@
  * @ingroup NativeWeb
  */
 class UNativeWebView;
+class ULocalPlayer;
 class UTextureRenderTarget2D;
 class SImage;
 
@@ -28,6 +29,7 @@ public:
 		}
 
 		SLATE_ARGUMENT(UNativeWebView*, View)
+		SLATE_ARGUMENT(ULocalPlayer*, Player)
 		SLATE_ARGUMENT(FSurfacePtr, Surface)
 	SLATE_END_ARGS()
 
@@ -296,6 +298,7 @@ private:
 
 	void Forward(const FAffineUiInput&) const;
 	TWeakObjectPtr<UNativeWebView> View;
+	TWeakObjectPtr<ULocalPlayer> Player;
 	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface;
 	TStrongObjectPtr<UTextureRenderTarget2D> Target;
 	TSharedPtr<SImage> Image;

@@ -41,6 +41,18 @@ namespace
 		bool bReady = false;
 	};
 
+	FIntRect FitSurfaceToView(const FIntRect& ViewRect, FIntPoint SurfaceSize)
+	{
+		const FIntPoint ViewSize = ViewRect.Size();
+		const double Scale = FMath::Min(static_cast<double>(ViewSize.X) / SurfaceSize.X,
+		                                static_cast<double>(ViewSize.Y) / SurfaceSize.Y);
+		// Snap the fitted image to whole pixels, including when the leftover margin is odd.
+		const FIntPoint DrawSize(FMath::Max(1, FMath::RoundToInt32(SurfaceSize.X * Scale)),
+		                         FMath::Max(1, FMath::RoundToInt32(SurfaceSize.Y * Scale)));
+		const FIntPoint DrawMin = ViewRect.Min + (ViewSize - DrawSize) / 2;
+		return FIntRect(DrawMin, DrawMin + DrawSize);
+	}
+
 	void QueueOutputTextureSnapshot(
 		const TSharedRef<FNativeWebGpuRenderState, ESPMode::ThreadSafe>& State,
 		FTextureRenderTargetResource* Resource)
@@ -78,7 +90,8 @@ namespace
 		BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
 			SHADER_PARAMETER_RDG_TEXTURE(Texture2D, WebTexture)
 			SHADER_PARAMETER_SAMPLER(SamplerState, WebSampler)
-			SHADER_PARAMETER(FVector4f, ViewRect)
+			SHADER_PARAMETER(FVector4f, DrawRect)
+			SHADER_PARAMETER(uint32, EncodeOutputSrgb)
 			RENDER_TARGET_BINDING_SLOTS()
 		END_SHADER_PARAMETER_STRUCT()
 
@@ -93,12 +106,9 @@ namespace
 	IMPLEMENT_GLOBAL_SHADER(FNativeWebViewportPS, "/Plugin/NativeWeb/Private/NativeWebViewport.usf", "MainPS",
 	                        SF_Pixel);
 
-	void AddNativeWebPass(FRDGBuilder& GraphBuilder, const FSceneView& View,
+	void AddNativeWebPass(FRDGBuilder& GraphBuilder, const FIntRect& DrawRect,
 	                      const FTextureRHIRef& SceneRHI, const FTextureRHIRef& WebRHI)
 	{
-		const FIntRect FinalViewRect = View.UnscaledViewRect;
-		if (!SceneRHI.IsValid() || !WebRHI.IsValid() || FinalViewRect.IsEmpty()) return;
-
 		FRDGTextureRef OutputTexture = GraphBuilder.RegisterExternalTexture(
 			CreateRenderTarget(SceneRHI, TEXT("NativeWeb.SceneOutput")));
 		FRDGTextureRef WebTexture = GraphBuilder.RegisterExternalTexture(
@@ -106,14 +116,22 @@ namespace
 		FNativeWebViewportPS::FParameters* Parameters = GraphBuilder.AllocParameters<
 			FNativeWebViewportPS::FParameters>();
 		Parameters->WebTexture = WebTexture;
-		Parameters->WebSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
-		Parameters->ViewRect = FVector4f(static_cast<float>(FinalViewRect.Min.X),
-		                                 static_cast<float>(FinalViewRect.Min.Y),
-		                                 static_cast<float>(FinalViewRect.Width()),
-		                                 static_cast<float>(FinalViewRect.Height()));
+		// Use one texel per pixel at native size and blend texels only when scaling.
+		const bool bNativeSize = DrawRect.Size() == WebRHI->GetDesc().Extent;
+		Parameters->WebSampler = bNativeSize ?
+			TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI() :
+			TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+		Parameters->DrawRect = FVector4f(static_cast<float>(DrawRect.Min.X),
+		                                 static_cast<float>(DrawRect.Min.Y),
+		                                 static_cast<float>(DrawRect.Width()),
+		                                 static_cast<float>(DrawRect.Height()));
+		const FRHITextureDesc& SceneDesc = SceneRHI->GetDesc();
+		// D3D11 has no sRGB render-target view for the supported 10-bit format.
+		const bool bHardwareSrgb = SceneDesc.Format != PF_A2B10G10R10 &&
+			EnumHasAnyFlags(SceneDesc.Flags, ETextureCreateFlags::SRGB);
+		Parameters->EncodeOutputSrgb = bHardwareSrgb ? 0u : 1u;
 		Parameters->RenderTargets[0] = FRenderTargetBinding(OutputTexture, ERenderTargetLoadAction::ELoad);
 
-		const FIntRect DrawRect = FinalViewRect;
 		GraphBuilder.AddPass(RDG_EVENT_NAME("NativeWeb GPU Viewport"), Parameters, ERDGPassFlags::Raster,
 		                     [Parameters, DrawRect](FRHICommandList& RHICmdList)
 		                     {
@@ -140,7 +158,7 @@ namespace
 			                                            static_cast<float>(DrawRect.Max.Y), 1.0f);
 			                     RHICmdList.SetScissorRect(true, DrawRect.Min.X, DrawRect.Min.Y, DrawRect.Max.X,
 			                                               DrawRect.Max.Y);
-			                     RHICmdList.DrawPrimitive(0, 1, 3);
+			                     RHICmdList.DrawPrimitive(0, 1, 1);
 			                     RHICmdList.SetScissorRect(false, 0, 0, 0, 0);
 		                     });
 	}
@@ -204,6 +222,7 @@ public:
 		const FRHITextureDesc& SceneDesc = SceneTexture->GetDesc();
 		const FIntPoint SceneExtent(SceneDesc.Extent.X, SceneDesc.Extent.Y);
 		const FIntRect ViewRect = View.UnscaledViewRect;
+		if (ViewRect.Width() <= 0 || ViewRect.Height() <= 0) return;
 		if (SceneDesc.Dimension != ETextureDimension::Texture2D || SceneDesc.ArraySize != 1 ||
 			SceneDesc.NumMips != 1 || SceneDesc.NumSamples != 1 ||
 			!EnumHasAllFlags(SceneDesc.Flags, ETextureCreateFlags::RenderTargetable) ||
@@ -238,7 +257,8 @@ public:
 				return;
 			}
 		}
-		AddNativeWebPass(GraphBuilder, View, SceneTexture, WebTexture);
+		AddNativeWebPass(GraphBuilder, FitSurfaceToView(ViewRect, WebTexture->GetDesc().Extent),
+		                 SceneTexture, WebTexture);
 	}
 
 	void SetEnabled(bool bEnabled)
@@ -304,15 +324,15 @@ public:
 		if (bPointerPressed)
 		{
 			MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_POINTER_MOVE,
-			          0.0f, false, SlateApp, true);
+			          0.0f, false, true);
 			return true;
 		}
 		const bool bInside = IsViewportHit(SlateApp, Event.GetScreenSpacePosition()) &&
-			IsInsideView(Event.GetScreenSpacePosition(), SlateApp);
+			IsInsideView(Event.GetScreenSpacePosition());
 		if (bInside)
 		{
 			bPointerInside = MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_POINTER_MOVE,
-			                           0.0f, false, SlateApp);
+			                           0.0f, false);
 			return bPointerInside;
 		}
 		if (bPointerInside)
@@ -333,7 +353,7 @@ public:
 			!IsTargetWindow(SlateApp, Event) || !IsViewportHit(SlateApp, Event.GetScreenSpacePosition()))
 			return false;
 		if (!MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_POINTER_DOWN,
-		               0.0f, Event.IsShiftDown(), SlateApp))
+		               0.0f, Event.IsShiftDown()))
 			return false;
 		bPointerPressed = true;
 		bPointerInside = true;
@@ -359,7 +379,7 @@ public:
 			!IsTargetWindow(SlateApp, Event))
 			return false;
 		MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_POINTER_UP,
-		          0.0f, Event.IsShiftDown(), SlateApp, true);
+		          0.0f, Event.IsShiftDown(), true);
 		bPointerPressed = false;
 		bPointerInside = false;
 		SlateApp.GetPlatformApplication()->SetCapture(nullptr);
@@ -374,7 +394,7 @@ public:
 			!IsViewportHit(SlateApp, Event.GetScreenSpacePosition()))
 			return false;
 		return MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_WHEEL,
-		                 Event.GetWheelDelta(), Event.IsShiftDown(), SlateApp);
+		                 Event.GetWheelDelta(), Event.IsShiftDown());
 	}
 
 	virtual bool HandleKeyDownEvent(FSlateApplication& SlateApp, const FKeyEvent& Event) override
@@ -477,39 +497,37 @@ private:
 		const FIntPoint PixelSize = ViewportClient->Viewport->GetSizeXY();
 		OutViewportPixels = FVector2D(PixelSize.X, PixelSize.Y);
 		if (OutGeometry) *OutGeometry = ViewportWidget.Pin()->GetCachedGeometry();
-		return !OutRect.IsEmpty() && PixelSize.X > 0 && PixelSize.Y > 0;
+		return OutRect.Width() > 0 && OutRect.Height() > 0 && PixelSize.X > 0 && PixelSize.Y > 0;
 	}
 
-	FVector2D ToViewportPixels(const FVector2D& ScreenPosition, FSlateApplication& SlateApp) const
+	bool GetPointerPosition(const FVector2D& ScreenPosition, FVector2D& OutNormalized,
+	                        bool bAllowOutside = false) const
 	{
 		FIntRect Rect;
 		FVector2D PixelSize;
 		FGeometry Geometry;
-		if (!GetViewRect(Rect, PixelSize, &Geometry)) return FVector2D(-1.0, -1.0);
+		UNativeWebView* Pinned = View.Get();
+		const UTextureRenderTarget2D* Texture = Pinned ? Pinned->GetTexture() : nullptr;
+		if (!Texture || !GetViewRect(Rect, PixelSize, &Geometry)) return false;
 		const FVector2D Local = Geometry.AbsoluteToLocal(ScreenPosition);
 		const FVector2D LocalSize = Geometry.GetLocalSize();
-		if (LocalSize.X <= 0.0 || LocalSize.Y <= 0.0) return FVector2D(-1.0, -1.0);
-		return FVector2D(Local.X * PixelSize.X / LocalSize.X, Local.Y * PixelSize.Y / LocalSize.Y);
+		if (LocalSize.X <= 0.0 || LocalSize.Y <= 0.0) return false;
+		const FVector2D Pixel(Local.X * PixelSize.X / LocalSize.X, Local.Y * PixelSize.Y / LocalSize.Y);
+		const FIntRect DrawRect = FitSurfaceToView(Rect, FIntPoint(Texture->SizeX, Texture->SizeY));
+		return FNativeWebGpuPresenter::ConvertViewportPoint(Pixel, DrawRect, OutNormalized, bAllowOutside);
 	}
 
-	bool IsInsideView(const FVector2D& ScreenPosition, FSlateApplication& SlateApp) const
+	bool IsInsideView(const FVector2D& ScreenPosition) const
 	{
-		FIntRect Rect;
-		FVector2D PixelSize;
-		if (!GetViewRect(Rect, PixelSize)) return false;
-		const FVector2D Pixel = ToViewportPixels(ScreenPosition, SlateApp);
-		return Pixel.X >= Rect.Min.X && Pixel.Y >= Rect.Min.Y && Pixel.X < Rect.Max.X && Pixel.Y < Rect.Max.Y;
+		FVector2D Normalized;
+		return GetPointerPosition(ScreenPosition, Normalized);
 	}
 
 	bool MakeInput(const FVector2D& ScreenPosition, ENativeWebInputType Type, float Wheel, bool bShift,
-	               FSlateApplication& SlateApp, bool bAllowOutside = false)
+	               bool bAllowOutside = false)
 	{
-		FIntRect Rect;
-		FVector2D PixelSize;
-		if (!GetViewRect(Rect, PixelSize)) return false;
-		const FVector2D Pixel = ToViewportPixels(ScreenPosition, SlateApp);
 		FVector2D Normalized;
-		if (!FNativeWebGpuPresenter::ConvertViewportPoint(Pixel, Rect, Normalized, bAllowOutside)) return false;
+		if (!GetPointerPosition(ScreenPosition, Normalized, bAllowOutside)) return false;
 		FNativeWebInputEvent Input;
 		Input.Type = Type;
 		Input.NormalizedPosition = Normalized;

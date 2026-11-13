@@ -79,7 +79,7 @@ public:
 	 * @endcode
 	 */
 
-	void ReleaseInput();
+	void ReleaseInput(bool bPreserveKeyboardFocus = false);
 	/**
 	 * @brief Performs the supports keyboard focus operation.
 	 * @return True when the operation succeeds or accepts the request; false when it fails or rejects it.
@@ -254,6 +254,8 @@ public:
 	 */
 
 	virtual FReply OnKeyUp(const FGeometry&, const FKeyEvent&) override;
+	/** Processes a character event for the active owning viewport console. */
+	virtual FReply OnKeyChar(const FGeometry&, const FCharacterEvent&) override;
 
 private:
 	/**

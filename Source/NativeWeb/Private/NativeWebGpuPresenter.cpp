@@ -177,7 +177,8 @@ public:
 		{
 			FScopeLock Lock(&State->Mutex);
 			if (State->Failure.IsEmpty())
-				State->Failure = TEXT("The GPU presenter supports only sRGB-D65 SDR output; other SDR output devices use Slate fallback.");
+				State->Failure = TEXT(
+					"The GPU presenter supports only sRGB-D65 SDR output; other SDR output devices use Slate fallback.");
 			return;
 		}
 		const FTextureRHIRef SceneTexture = View.Family->RenderTarget->GetRenderTargetTexture();
@@ -189,13 +190,14 @@ public:
 		}
 		const EPixelFormat SceneFormat = SceneTexture->GetFormat();
 		if (!FNativeWebGpuPresenter::IsSupportedSceneTarget(SceneFormat,
-			View.Family->RenderTarget->GetDisplayOutputFormat(),
-			View.Family->RenderTarget->GetDisplayColorGamut()))
+		                                                    View.Family->RenderTarget->GetDisplayOutputFormat(),
+		                                                    View.Family->RenderTarget->GetDisplayColorGamut()))
 		{
 			FScopeLock Lock(&State->Mutex);
 			if (State->Failure.IsEmpty())
 				State->Failure = FString::Printf(
-					TEXT("The scene target format %s or SDR output encoding is unsupported; GPU presentation requires opaque sRGB SDR."),
+					TEXT(
+						"The scene target format %s or SDR output encoding is unsupported; GPU presentation requires opaque sRGB SDR."),
 					GPixelFormats[SceneFormat].Name);
 			return;
 		}
@@ -211,7 +213,8 @@ public:
 		{
 			FScopeLock Lock(&State->Mutex);
 			if (State->Failure.IsEmpty())
-				State->Failure = TEXT("The scene target is not a compatible single-sample 2D renderable attachment for GPU presentation.");
+				State->Failure = TEXT(
+					"The scene target is not a compatible single-sample 2D renderable attachment for GPU presentation.");
 			return;
 		}
 		FTextureRHIRef WebTexture;
@@ -283,7 +286,7 @@ public:
 		}
 		if (NativeWebInputRouting::IsConsoleActive(PinnedPlayer))
 		{
-			ReleaseInput(SlateApp);
+			ReleaseInput(SlateApp, true);
 			return;
 		}
 		UpdateSurfaceSize();
@@ -296,7 +299,8 @@ public:
 	virtual bool HandleMouseMoveEvent(FSlateApplication& SlateApp, const FPointerEvent& Event) override
 	{
 		if (!bEnabled || NativeWebInputRouting::IsConsoleActive(Player.Get()) ||
-			!IsTargetWindow(SlateApp, Event)) return false;
+			!IsTargetWindow(SlateApp, Event))
+			return false;
 		if (bPointerPressed)
 		{
 			MakeInput(Event.GetScreenSpacePosition(), ENativeWebInputType::INPUT_POINTER_MOVE,
@@ -399,8 +403,13 @@ public:
 private:
 	bool HandleKey(FSlateApplication& SlateApp, const FKeyEvent& Event, ENativeWebInputType Type)
 	{
-		if (!bEnabled || NativeWebInputRouting::IsConsoleActive(Player.Get()) || !bFocused ||
-			!HasViewportFocus(SlateApp)) return false;
+		if (!bEnabled) return false;
+		if (NativeWebInputRouting::IsConsoleActive(Player.Get()))
+		{
+			return NativeWebInputRouting::RouteKeyToConsole(Player.Get(), Event,
+			                                                Type == ENativeWebInputType::INPUT_KEY_DOWN);
+		}
+		if (!bFocused || !HasViewportFocus(SlateApp)) return false;
 		FNativeWebInputEvent Input;
 		Input.Type = Type;
 		Input.bShift = Event.IsShiftDown();
@@ -416,8 +425,8 @@ private:
 	{
 		const TSharedPtr<SViewport> Widget = ViewportWidget.Pin();
 		return Widget.IsValid()
-			                                       ? SlateApp.FindWidgetWindow(Widget.ToSharedRef())
-			                                       : nullptr;
+			       ? SlateApp.FindWidgetWindow(Widget.ToSharedRef())
+			       : nullptr;
 	}
 
 	bool IsTargetWindow(FSlateApplication& SlateApp, const FInputEvent& Event) const
@@ -538,7 +547,7 @@ private:
 		if (UNativeWebView* Pinned = View.Get()) Pinned->ForwardInput(Event);
 	}
 
-	void ReleaseInput(FSlateApplication& SlateApp)
+	void ReleaseInput(FSlateApplication& SlateApp, const bool bPreserveKeyboardFocus = false)
 	{
 		if (bPointerPressed)
 		{
@@ -550,6 +559,7 @@ private:
 			bPointerInside = false;
 			SlateApp.GetPlatformApplication()->SetCapture(nullptr);
 		}
+		if (bPreserveKeyboardFocus) return;
 		SetFocus(false);
 		if (const TSharedPtr<SViewport> Widget = ViewportWidget.Pin();
 			Widget.IsValid() && SlateApp.GetKeyboardFocusedWidget() == Widget)

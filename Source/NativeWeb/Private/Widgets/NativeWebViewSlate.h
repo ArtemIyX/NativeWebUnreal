@@ -8,7 +8,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "AffineUiSurface.h"
+#include "AffineUI/AffineUiSurface.h"
 #include "Widgets/SCompoundWidget.h"
 
 /**

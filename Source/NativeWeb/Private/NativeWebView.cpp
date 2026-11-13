@@ -1,10 +1,10 @@
 
 
 #include "NativeWebView.h"
-#include "NativeWebGpuPresenter.h"
+#include "Presentation/NativeWebGpuPresenter.h"
 
-#include "AffineUiScriptInstance.h"
-#include "AffineUiSurface.h"
+#include "AffineUI/AffineUiScriptInstance.h"
+#include "AffineUI/AffineUiSurface.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/GameViewportClient.h"
 #include "Misc/FileHelper.h"
@@ -70,7 +70,7 @@ bool UNativeWebView::Initialize(FName InName, const FString& Html, const FString
 	OwningPlayer = Player;
 	PackagedAssetRoot = InPackagedAssetRoot;
 #if !PLATFORM_WINDOWS
-	OutError = BuildNativeWebError(TEXT("UnsupportedPlatform"), TEXT("NativeWeb views require Win64 D3D11."), ViewName);
+	OutError = BuildNativeWebError(TEXT("UnsupportedPlatform"), TEXT("NativeWeb views require Win64 D3D11 or D3D12."), ViewName);
 	UE_LOG(LogNativeWebView, Error, TEXT("View '%s' initialization rejected: %s"), *ViewName.ToString(),
 	       *OutError.Message);
 	return false;

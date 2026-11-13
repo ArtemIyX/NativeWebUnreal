@@ -1,7 +1,7 @@
 /**
  * @file Source/NativeWeb/NativeWeb.Build.cs
  * @brief Defines Unreal Build Tool rules for the NativeWeb module.
- * @details The Win64 D3D11 view runtime; QuickJS and view lifecycle are game-thread owned.
+ * @details The Win64 D3D11/D3D12 view runtime; QuickJS and view lifecycle are game-thread owned.
  * @ingroup NativeWeb
  */
 
@@ -24,7 +24,8 @@ public class NativeWeb : ModuleRules
         PrivateDependencyModuleNames.AddRange(new string[] { "AffineUnreal", "InputCore", "Projects", "RHI", "RenderCore", "Renderer", "Slate", "SlateCore" });
         if (Target.Platform == UnrealTargetPlatform.Win64)
         {
-            PrivateDependencyModuleNames.Add("D3D11RHI");
+            PrivateDependencyModuleNames.AddRange(new string[] { "D3D11RHI", "D3D12RHI", "DX12" });
+            PublicSystemLibraries.AddRange(new string[] { "d3d11.lib", "d3d12.lib", "dxgi.lib" });
         }
     }
 }

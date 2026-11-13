@@ -13,7 +13,7 @@
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
 #include "NativeWeb.h"
-#include "NativeWebInputRouting.h"
+#include "Input/NativeWebInputRouting.h"
 #include "NativeWebView.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
@@ -118,9 +118,9 @@ namespace
 		Parameters->WebTexture = WebTexture;
 		// Use one texel per pixel at native size and blend texels only when scaling.
 		const bool bNativeSize = DrawRect.Size() == WebRHI->GetDesc().Extent;
-		Parameters->WebSampler = bNativeSize ?
-			TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI() :
-			TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+		Parameters->WebSampler = bNativeSize
+			                         ? TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI()
+			                         : TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 		Parameters->DrawRect = FVector4f(static_cast<float>(DrawRect.Min.X),
 		                                 static_cast<float>(DrawRect.Min.Y),
 		                                 static_cast<float>(DrawRect.Width()),
@@ -616,9 +616,9 @@ bool FNativeWebGpuPresenter::Initialize(UNativeWebView* View, ULocalPlayer* Play
 		OutReason = TEXT("The view, local player, or output texture is unavailable.");
 		return false;
 	}
-	if (!GDynamicRHI || FCString::Stricmp(GDynamicRHI->GetName(), TEXT("D3D11")) != 0)
+	if (!GDynamicRHI || (!IsRHID3D11() && !IsRHID3D12()))
 	{
-		OutReason = TEXT("The GPU viewport presenter currently supports only D3D11.");
+		OutReason = TEXT("The GPU viewport presenter supports only the D3D11 and D3D12 RHIs.");
 		return false;
 	}
 	UGameViewportClient* ViewportClient = Player->ViewportClient;

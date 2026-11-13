@@ -11,12 +11,15 @@ configured by a NativeWeb view.
 
 ## Requirements and limits
 
-- The current renderer is supported on Win64 with the D3D11 RHI.
+- The renderer supports Win64 with either the D3D11 or D3D12 RHI. D3D11 uses
+  Unreal's native D3D11 device; D3D12 uses a same-adapter private D3D11
+  producer and a NativeWeb-owned shared BGRA8 transfer texture.
 - AffineUI currently allows one live surface per process. Creating another
   view while one is active fails with an error; close the first view before
   creating a replacement.
 - Create, evaluate, tick, and close views on the game thread. AffineUI surface
-  and D3D11 rendering work is performed on the RHI lane.
+  and producer submission work is performed on the RHI lane; D3D12
+  producer-fence polling is performed asynchronously before the UE copy.
 - The packaged workflow reads files only from the project's `Content`
   directory. It does not load arbitrary URLs or JavaScript modules.
 - HTML/CSS relative asset URLs are not generally resolved by the surface.
@@ -180,7 +183,7 @@ to the project's `Content` directory.
   releases view-owned focus/capture, invalidates callbacks, and tears down the
   runtime. `DestroyView` additionally removes the view from the subsystem map.
 
-The GPU path currently supports Win64, D3D11, one live AffineUI surface, and
+The GPU path currently supports Win64, D3D11 or D3D12, one live AffineUI surface, and
 non-stereo viewports whose scene target is PF_B8G8R8A8, PF_R8G8B8A8, or
 PF_A2B10G10R10. The supported output device is opaque `SDR_sRGB` with the
 sRGB-D65 gamut. AffineUI creates a single-sample BGRA8 sRGB texture: its
@@ -202,7 +205,8 @@ No performance improvement is claimed.
 ## Local GPU presenter validation (UE 5.7)
 
 Do not use a mock render target as evidence for draw ordering or GPU lifetime.
-Run these checks locally in Development with D3D11:
+Runtime validation remains pending. Run these checks locally in Development
+with both `-dx11` and `-dx12`:
 
 1. Open the project in PIE and standalone. Confirm a default inline view and a
    default packaged view report requested `GpuViewport`, then active
@@ -224,15 +228,19 @@ Run these checks locally in Development with D3D11:
 5. Resize the game window and viewport, change DPI scaling, and repeat in PIE
    and standalone. Check split-screen and stereo behavior explicitly; stereo
    is rejected and should use the configured fallback.
-6. Package a Development build with the plugin enabled and verify
+6. On D3D12, repeat with both legacy and enhanced barrier implementations and
+   verify the engine's chosen barrier log. Check BGRA8 color/alpha, consecutive
+   transfer-slot reuse, superseded revisions, and close/reopen with work in
+   flight. Do not enable a global GPU stall as a workaround.
+7. Package a Development build with the plugin enabled and verify
    `/Plugin/NativeWeb/Private/NativeWebViewport.usf` is available at startup.
    Repeat create/switch/destroy and shutdown cycles and inspect render/RHI logs
    for stale textures, device warnings, or use-after-free.
 
 The focused automation group is `Automation RunTests NativeWeb.Presentation`.
-The GPU draw order, cooked shader loading, input capture, and RHI retirement
-still require the live checks above; the coordinate unit test does not prove
-those integration properties.
+The GPU draw order, cooked shader loading, input capture, cross-RHI transfer,
+barrier mode, and RHI retirement still require the live checks above; source
+inspection does not prove those integration properties.
 
 ## Two-way messaging
 

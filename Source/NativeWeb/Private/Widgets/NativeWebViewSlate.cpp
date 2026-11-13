@@ -1,12 +1,10 @@
-
-
 #include "Widgets/NativeWebViewSlate.h"
 
 #include "Engine/TextureRenderTarget2D.h"
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
 #include "NativeWeb.h"
-#include "NativeWebInputRouting.h"
+#include "Input/NativeWebInputRouting.h"
 #include "NativeWebView.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Widgets/Images/SImage.h"
@@ -46,7 +44,8 @@ void SNativeWebView::SetVisible(bool bInVisible)
 
 void SNativeWebView::ReleaseInput(const bool bPreserveKeyboardFocus)
 {
-	UE_LOG(LogNativeWebInput, Verbose, TEXT("Releasing Slate input state (pointerPressed=%s mouseCapture=%s keyboardFocus=%s)."),
+	UE_LOG(LogNativeWebInput, Verbose,
+	       TEXT("Releasing Slate input state (pointerPressed=%s mouseCapture=%s keyboardFocus=%s)."),
 	       bPointerPressed ? TEXT("true") : TEXT("false"), HasMouseCapture() ? TEXT("true") : TEXT("false"),
 	       HasKeyboardFocus() ? TEXT("true") : TEXT("false"));
 	if (bPointerPressed)
@@ -211,7 +210,9 @@ FReply SNativeWebView::ForwardKey(EAffineUiInputKind Kind, const FKeyEvent& Even
 	if (!bVisible) return FReply::Unhandled();
 	if (NativeWebInputRouting::IsConsoleActive(Player.Get()))
 		return NativeWebInputRouting::RouteKeyToConsole(Player.Get(), Event,
-			Kind == EAffineUiInputKind::KeyDown) ? FReply::Handled() : FReply::Unhandled();
+		                                                Kind == EAffineUiInputKind::KeyDown)
+			       ? FReply::Handled()
+			       : FReply::Unhandled();
 	FAffineUiInput Input{Kind};
 	if (Event.GetKey() == EKeys::Tab) Input.Key = EAffineUiInputKey::Tab;
 	else if (Event.GetKey() == EKeys::Enter) Input.Key = EAffineUiInputKey::Enter;

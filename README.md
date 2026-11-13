@@ -128,11 +128,11 @@ validation steps are in the [NativeWeb module README](Source/NativeWeb/README.md
 
 ## Platform and runtime limits
 
-The NativeWeb view backend currently requires **Win64 + D3D11**. AffineUI
+The NativeWeb view backend currently requires **Win64 + D3D11 or D3D12**. AffineUI
 permits **one live surface per process**; attempting to create another live
 view fails clearly until the existing view is closed. QuickJS creation,
 evaluation, message delivery, job pumping, and destruction belong to the game
-thread. AffineUI surface and D3D11 work runs on the RHI lane.
+thread. AffineUI surface and D3D11/D3D12 producer work runs on the RHI lane.
 
 The view workflow reads packaged assets from the project's `Content`
 directory; it does not access arbitrary filesystem paths from the RHI lane.

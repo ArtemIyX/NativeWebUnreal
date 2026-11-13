@@ -1,18 +1,27 @@
-
-
 #include "AffineUiSurfaceRenderer.h"
 
 #include "Async/Async.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "NativeWeb.h"
 #include "RenderCommandFence.h"
 #include "RenderingThread.h"
+#include "DynamicRHI.h"
 #include "RHICommandList.h"
+#include "RHIResources.h"
 #include "TextureResource.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/PlatformTime.h"
+#include "Templates/Function.h"
 
 #if PLATFORM_WINDOWS
+#include "AffineUiSurfaceRenderer_D3D12.h"
 #include "ID3D11DynamicRHI.h"
+#include "ID3D12DynamicRHI.h"
+#include "d3d11_4.h"
+#include "d3d12.h"
+#include "dxgi1_6.h"
 #pragma push_macro("check")
 #pragma push_macro("small")
 #pragma push_macro("FW_THIN")
@@ -48,7 +57,6 @@ namespace
 	bool bAffineError = false;
 
 
-
 	void AffineLog(affineui_log_level Level, const char* Message, void*)
 	{
 		if (Level == AFFINEUI_LOG_ERROR)
@@ -61,7 +69,6 @@ namespace
 			UE_LOG(LogNativeWebRender, Warning, TEXT("AffineUI: %s"), UTF8_TO_TCHAR(Message ? Message : ""));
 		}
 	}
-
 
 
 	int LoadFontResource(void* User, const char* Url, affineui_resource_blob* Out)
@@ -90,7 +97,6 @@ namespace
 	}
 
 
-
 	int ToAffineKey(EAffineUiInputKey Key)
 	{
 		switch (Key)
@@ -103,76 +109,135 @@ namespace
 	}
 }
 
-
 class FAffineUiSurfaceRenderer::FState
 {
 public:
 	~FState()
 	{
 		if (Ui) { affineui_ui_destroy(Ui); }
+		if (D3D12Bridge) { D3D12Bridge->Shutdown(); }
 	}
 
 
-
-	bool Render(FRHITexture* Output, FIntPoint Size, float DpiScale, FColor ClearColor, const FAffineUiContent& Content,
-	            const TArray<FAffineUiTextMutation>& TextMutations,
-	            const TArray<FAffineUiMutation>& Mutations, uint64 InDocumentEpoch,
-	            TSharedRef<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe> InFontAssets)
+	EAffineUiRenderResult Render(const FTextureRHIRef& Output, FIntPoint Size, float DpiScale, FColor ClearColor,
+	                             const FAffineUiContent& Content,
+	                             const TArray<FAffineUiTextMutation>& TextMutations,
+	                             const TArray<FAffineUiMutation>& Mutations, uint64 InDocumentEpoch,
+	                             TSharedRef<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe> InFontAssets,
+	                             TFunction<void(EAffineUiRenderResult)>&& Completion)
 	{
 		UE_LOG(LogNativeWebRender, VeryVerbose,
 		       TEXT("RHI render starting (size=%dx%d dpi=%.2f epoch=%llu textMutations=%d mutations=%d)."),
 		       Size.X, Size.Y, DpiScale, static_cast<unsigned long long>(InDocumentEpoch),
 		       TextMutations.Num(), Mutations.Num());
-		if (!Output || !IsRHID3D11()) { return Fail(TEXT("D3D11 output is unavailable")); }
-		ID3D11DynamicRHI* Rhi = GetID3D11DynamicRHI();
-		ID3D11Device* Device = Rhi->RHIGetDevice();
-		ID3D11DeviceContext* Immediate = Rhi->RHIGetDeviceContext();
-		ID3D11Resource* Destination = Rhi->RHIGetResource(Output);
-		if (!Device || !Immediate || !Destination) { return Fail(TEXT("D3D11 device or output is unavailable")); }
-
-		TRefCountPtr<ID3D11Texture2D> DestinationTexture;
-		HRESULT Result = Destination->QueryInterface(__uuidof(ID3D11Texture2D),
-		                                             reinterpret_cast<void**>(DestinationTexture.GetInitReference()));
-		if (FAILED(Result)) { return Fail(TEXT("QueryInterface output"), Result); }
-		D3D11_TEXTURE2D_DESC OutputDesc{};
-		DestinationTexture->GetDesc(&OutputDesc);
-		if (OutputDesc.Width != static_cast<uint32>(Size.X) || OutputDesc.Height != static_cast<uint32>(Size.Y) ||
-			OutputDesc.MipLevels != 1 || OutputDesc.ArraySize != 1 || OutputDesc.SampleDesc.Count != 1 ||
-			(OutputDesc.Format != DXGI_FORMAT_B8G8R8A8_TYPELESS && OutputDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM &&
-				OutputDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB))
+		const bool bD3D11 = IsRHID3D11();
+		const bool bD3D12 = IsRHID3D12();
+		if (!Output.IsValid() || (!bD3D11 && !bD3D12))
 		{
-			return Fail(TEXT("Output texture is not a compatible single-sample BGRA8 texture"));
+			return Fail(TEXT("NativeWeb requires an active D3D11 or D3D12 RHI"));
+		}
+		ID3D11Device* Device = nullptr;
+		ID3D11DeviceContext* Immediate = nullptr;
+		ID3D11Resource* Destination = nullptr;
+		TSharedPtr<FNativeWebD3D12Bridge::FSlot, ESPMode::ThreadSafe> Slot;
+		bool bSlotSubmitted = false;
+		ON_SCOPE_EXIT
+		{
+			if (Slot.IsValid() && !bSlotSubmitted) D3D12Bridge->ReleaseSlot(*Slot);
+		};
+		if (bD3D11)
+		{
+			ID3D11DynamicRHI* Rhi = GetID3D11DynamicRHI();
+			Device = Rhi->RHIGetDevice();
+			Immediate = Rhi->RHIGetDeviceContext();
+			Destination = Rhi->RHIGetResource(Output.GetReference());
+		}
+		else
+		{
+			if (!D3D12Bridge)
+			{
+				FString BridgeError;
+				D3D12Bridge = FNativeWebD3D12Bridge::Create(Size, BridgeError);
+				if (!D3D12Bridge) return Fail(*BridgeError);
+			}
+			FString AcquireError;
+			const FNativeWebD3D12Bridge::EAcquireResult AcquireResult = D3D12Bridge->AcquireSlot(
+				Size, Slot, AcquireError);
+			if (AcquireResult == FNativeWebD3D12Bridge::EAcquireResult::Busy)
+			{
+				return EAffineUiRenderResult::Deferred;
+			}
+			if (AcquireResult == FNativeWebD3D12Bridge::EAcquireResult::Failure)
+			{
+				return Fail(*AcquireError);
+			}
+			Device = D3D12Bridge->GetDevice();
+			Immediate = D3D12Bridge->GetImmediateContext();
+			Destination = D3D12Bridge->GetDestination(*Slot);
+		}
+		if (!Device || !Immediate || !Destination)
+		{
+			return Fail(TEXT("D3D11 producer device or output is unavailable"));
+		}
+
+		TRefCountPtr<ID3D11RenderTargetView> ColorView;
+		TRefCountPtr<ID3D11DepthStencilView> DepthView;
+		TRefCountPtr<ID3D11Texture2D> Color;
+		TRefCountPtr<ID3D11Texture2D> Depth;
+		HRESULT Result = S_OK;
+		if (Slot.IsValid())
+		{
+			Color = D3D12Bridge->GetColor(*Slot);
+			ColorView = D3D12Bridge->GetColorView(*Slot);
+			DepthView = D3D12Bridge->GetDepthView(*Slot);
+		}
+		else
+		{
+			TRefCountPtr<ID3D11Texture2D> DestinationTexture;
+			Result = Destination->QueryInterface(__uuidof(ID3D11Texture2D),
+			                                     reinterpret_cast<void**>(DestinationTexture.GetInitReference()));
+			if (FAILED(Result)) { return Fail(TEXT("QueryInterface output"), Result); }
+			D3D11_TEXTURE2D_DESC OutputDesc{};
+			DestinationTexture->GetDesc(&OutputDesc);
+			if (OutputDesc.Width != static_cast<uint32>(Size.X) || OutputDesc.Height != static_cast<uint32>(Size.Y) ||
+				OutputDesc.MipLevels != 1 || OutputDesc.ArraySize != 1 || OutputDesc.SampleDesc.Count != 1 ||
+				(OutputDesc.Format != DXGI_FORMAT_B8G8R8A8_TYPELESS && OutputDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM
+					&&
+					OutputDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB))
+			{
+				return Fail(TEXT("Output texture is not a compatible single-sample BGRA8 texture"));
+			}
+			D3D11_TEXTURE2D_DESC ColorDesc{};
+			ColorDesc.Width = Size.X;
+			ColorDesc.Height = Size.Y;
+			ColorDesc.MipLevels = 1;
+			ColorDesc.ArraySize = 1;
+			ColorDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+			ColorDesc.SampleDesc.Count = 1;
+			ColorDesc.Usage = D3D11_USAGE_DEFAULT;
+			ColorDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+			Result = Device->CreateTexture2D(&ColorDesc, nullptr, Color.GetInitReference());
+			if (FAILED(Result)) { return Fail(TEXT("CreateTexture2D color"), Result); }
+			Result = Device->CreateRenderTargetView(Color.GetReference(), nullptr, ColorView.GetInitReference());
+			if (FAILED(Result)) { return Fail(TEXT("CreateRenderTargetView"), Result); }
+			D3D11_TEXTURE2D_DESC DepthDesc = ColorDesc;
+			DepthDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+			DepthDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+			Result = Device->CreateTexture2D(&DepthDesc, nullptr, Depth.GetInitReference());
+			if (FAILED(Result)) { return Fail(TEXT("CreateTexture2D depth"), Result); }
+			Result = Device->CreateDepthStencilView(Depth.GetReference(), nullptr, DepthView.GetInitReference());
+			if (FAILED(Result)) { return Fail(TEXT("CreateDepthStencilView"), Result); }
 		}
 
 		if (!Context)
 		{
-			Result = Device->CreateDeferredContext(0, Context.GetInitReference());
-			if (FAILED(Result)) { return Fail(TEXT("CreateDeferredContext"), Result); }
+			if (bD3D12) Context = D3D12Bridge->GetDeferredContext();
+			else
+			{
+				Result = Device->CreateDeferredContext(0, Context.GetInitReference());
+				if (FAILED(Result)) { return Fail(TEXT("CreateDeferredContext"), Result); }
+			}
 		}
-		D3D11_TEXTURE2D_DESC ColorDesc{};
-		ColorDesc.Width = Size.X;
-		ColorDesc.Height = Size.Y;
-		ColorDesc.MipLevels = 1;
-		ColorDesc.ArraySize = 1;
-		ColorDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-		ColorDesc.SampleDesc.Count = 1;
-		ColorDesc.Usage = D3D11_USAGE_DEFAULT;
-		ColorDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-		TRefCountPtr<ID3D11Texture2D> Color;
-		TRefCountPtr<ID3D11RenderTargetView> ColorView;
-		TRefCountPtr<ID3D11Texture2D> Depth;
-		TRefCountPtr<ID3D11DepthStencilView> DepthView;
-		Result = Device->CreateTexture2D(&ColorDesc, nullptr, Color.GetInitReference());
-		if (FAILED(Result)) { return Fail(TEXT("CreateTexture2D color"), Result); }
-		Result = Device->CreateRenderTargetView(Color.GetReference(), nullptr, ColorView.GetInitReference());
-		if (FAILED(Result)) { return Fail(TEXT("CreateRenderTargetView"), Result); }
-		D3D11_TEXTURE2D_DESC DepthDesc = ColorDesc;
-		DepthDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-		DepthDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-		Result = Device->CreateTexture2D(&DepthDesc, nullptr, Depth.GetInitReference());
-		if (FAILED(Result)) { return Fail(TEXT("CreateTexture2D depth"), Result); }
-		Result = Device->CreateDepthStencilView(Depth.GetReference(), nullptr, DepthView.GetInitReference());
-		if (FAILED(Result)) { return Fail(TEXT("CreateDepthStencilView"), Result); }
 
 		bAffineError = false;
 		if (!Ui)
@@ -369,12 +434,29 @@ public:
 			Context.SafeRelease();
 			return Fail(TEXT("FinishCommandList"), Result);
 		}
+		if (bD3D12)
+		{
+			FString ProducerError;
+			if (!D3D12Bridge->SubmitProducer(*Slot, Commands.GetReference(), ProducerError))
+			{
+				UE_LOG(LogNativeWebRender, Error, TEXT("%s"), *ProducerError);
+				return EAffineUiRenderResult::Failure;
+			}
+			if (!D3D12Bridge->QueueCopy(Slot, Output, MoveTemp(Completion)))
+			{
+				return EAffineUiRenderResult::Failure;
+			}
+			bSlotSubmitted = true;
+			RenderedSize = Size;
+			RenderedDpiScale = DpiScale;
+			return EAffineUiRenderResult::Pending;
+		}
 		Immediate->ExecuteCommandList(Commands.GetReference(), true);
 		RenderedSize = Size;
 		RenderedDpiScale = DpiScale;
 		UE_LOG(LogNativeWebRender, VeryVerbose, TEXT("RHI render completed (size=%dx%d epoch=%llu)."),
 		       Size.X, Size.Y, static_cast<unsigned long long>(DocumentEpoch));
-		return true;
+		return EAffineUiRenderResult::Success;
 	}
 
 	bool DispatchInput(const FAffineUiInput& Input, FIntPoint TextureSize, uint64 InDocumentEpoch,
@@ -443,8 +525,6 @@ public:
 	}
 
 private:
-
-
 	void RegisterClickHandler(uint64 NodeId)
 	{
 		if (RegisteredClickNodes.Contains(NodeId)) { return; }
@@ -480,9 +560,7 @@ private:
 	}
 
 
-
 	static bool IsValidHandle(affineui_dom_handle Handle) { return Handle.document_id != 0 && Handle.generation != 0; }
-
 
 
 	void PruneInvalidHandles()
@@ -490,7 +568,6 @@ private:
 		for (auto It = NodeHandles.CreateIterator(); It; ++It)
 			if (!affineui_ui_node_valid(Ui, It.Value())) It.RemoveCurrent();
 	}
-
 
 
 	void DiscardRecordedCommands()
@@ -510,14 +587,14 @@ private:
 	}
 
 
-
-	static bool Fail(const TCHAR* Operation, HRESULT Result = S_OK)
+	static EAffineUiRenderResult Fail(const TCHAR* Operation, HRESULT Result = S_OK)
 	{
 		UE_LOG(LogNativeWebRender, Error, TEXT("%s (HRESULT 0x%08x)"), Operation, static_cast<uint32>(Result));
-		return false;
+		return EAffineUiRenderResult::Failure;
 	}
 
 	TRefCountPtr<ID3D11DeviceContext> Context;
+	TSharedPtr<FNativeWebD3D12Bridge, ESPMode::ThreadSafe> D3D12Bridge;
 	affineui_ui* Ui = nullptr;
 	FString LastHtml;
 	FString LastCss;
@@ -562,19 +639,27 @@ void FAffineUiSurfaceRenderer::Draw(FTextureRenderTargetResource* Target, FIntPo
 					TextMutations = MoveTemp(TextMutations), Mutations = MoveTemp(Mutations), DocumentEpoch, Revision,
 					Surface](FRHICommandListBase&)
 				{
-					bool bSuccess = false;
+					TFunction<void(EAffineUiRenderResult)> Completion = [Surface, Revision](
+						EAffineUiRenderResult Result)
+					{
+						AsyncTask(ENamedThreads::GameThread, [Surface, Revision, Result]()
+						{
+							if (TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Pinned = Surface.Pin())
+							{
+								Pinned->OnRenderComplete(Revision, Result);
+							}
+						});
+					};
+					EAffineUiRenderResult Result = EAffineUiRenderResult::Failure;
 #if PLATFORM_WINDOWS
 					if (!State) { State = new FState(); }
-					bSuccess = State->Render(Output.GetReference(), Size, DpiScale, ClearColor, Content, TextMutations,
-					                         Mutations, DocumentEpoch, FontAssets);
+					Result = State->Render(Output, Size, DpiScale, ClearColor, Content, TextMutations,
+					                       Mutations, DocumentEpoch, FontAssets, MoveTemp(Completion));
 #endif
-					AsyncTask(ENamedThreads::GameThread, [Surface, Revision, bSuccess]()
+					if (Result != EAffineUiRenderResult::Pending)
 					{
-						if (TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Pinned = Surface.Pin())
-						{
-							Pinned->OnRenderComplete(Revision, bSuccess);
-						}
-					});
+						Completion(Result);
+					}
 				});
 		});
 }
@@ -611,10 +696,11 @@ void FAffineUiSurfaceRenderer::Shutdown()
 	UE_LOG(LogNativeWebRender, Verbose, TEXT("Waiting for RHI renderer shutdown."));
 	ENQUEUE_RENDER_COMMAND(AffineSurfaceShutdown)([this](FRHICommandListImmediate& RHICmdList)
 	{
-		// Close is infrequent: retire submitted GPU work before releasing AffineUI's resources.
-		RHICmdList.SubmitAndBlockUntilGPUIdle();
 		RHICmdList.EnqueueLambda([this](FRHICommandListBase&)
 		{
+			// The RHI command stream owns the submission ordering. D3D12 transfer
+			// slots retain their native resources through their UE GPU fences; no
+			// process-wide GPU idle is required during close.
 			delete State;
 			State = nullptr;
 		});

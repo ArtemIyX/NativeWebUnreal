@@ -1,5 +1,5 @@
 /**
- * @file Source/NativeWeb/Private/NativeWebGpuPresenter.h
+ * @file Source/NativeWeb/Private/Presentation/NativeWebGpuPresenter.h
  * @brief Declares the private GPU viewport presenter.
  * @ingroup NativeWeb
  */

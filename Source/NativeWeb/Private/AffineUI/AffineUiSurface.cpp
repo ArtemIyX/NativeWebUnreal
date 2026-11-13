@@ -1,5 +1,3 @@
-
-
 #include "AffineUiSurface.h"
 
 #include "AffineUiSurfaceRenderer.h"
@@ -19,15 +17,11 @@ namespace
 {
 	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> ActiveSurface;
 
-
-
 	bool IsValidDescriptor(FIntPoint Size, float DpiScale)
 	{
 		return Size.X > 0 && Size.Y > 0 && Size.X <= 4096 && Size.Y <= 4096 &&
 			FMath::IsFinite(DpiScale) && DpiScale > 0.0f && DpiScale <= 8.0f;
 	}
-
-
 
 	bool ContainsEmbeddedNull(const FString& Text)
 	{
@@ -38,10 +32,9 @@ namespace
 class FAffineUiSurface::FImpl
 {
 public:
-
 	struct FRetiredTexture
 	{
-		explicit FRetiredTexture(UTextureRenderTarget2D* InTexture) : Texture(InTexture)
+		explicit FRetiredTexture(TStrongObjectPtr<UTextureRenderTarget2D>&& InTexture) : Texture(MoveTemp(InTexture))
 		{
 			GpuFence = RHICreateGPUFence(TEXT("AffineSurfaceRetire"));
 			if (GpuFence)
@@ -66,7 +59,6 @@ public:
 	};
 
 
-
 	void CollectRetired()
 	{
 		Retired.RemoveAll([](const TUniquePtr<FRetiredTexture>& Entry)
@@ -85,6 +77,7 @@ public:
 	TStrongObjectPtr<UTextureRenderTarget2D> Pending;
 	TArray<TUniquePtr<FRetiredTexture>> Retired;
 	FTSTicker::FDelegateHandle RetirementTicker;
+	FTSTicker::FDelegateHandle RetryTicker;
 	FString LastError;
 	uint64 DesiredRevision = 1;
 	uint64 PendingRevision = 0;
@@ -110,13 +103,14 @@ TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> FAffineUiSurface::Create(
 	UE_LOG(LogNativeWebAffineUi, Log, TEXT("Requesting surface %dx%d at DPI %.2f."),
 	       Desc.PixelSize.X, Desc.PixelSize.Y, Desc.DpiScale);
 #if !PLATFORM_WINDOWS
-	OutError = TEXT("AffineUI surfaces require Win64 D3D11.");
+	OutError = TEXT("AffineUI surfaces require Win64 D3D11 or D3D12.");
 	UE_LOG(LogNativeWebAffineUi, Error, TEXT("Surface creation rejected: %s"), *OutError);
 	return nullptr;
 #else
-	if (!GDynamicRHI || GDynamicRHI->GetInterfaceType() != ERHIInterfaceType::D3D11)
+	if (!GDynamicRHI || (GDynamicRHI->GetInterfaceType() != ERHIInterfaceType::D3D11 &&
+		GDynamicRHI->GetInterfaceType() != ERHIInterfaceType::D3D12))
 	{
-		OutError = TEXT("AffineUI surfaces require D3D11; launch with -dx11.");
+		OutError = TEXT("AffineUI surfaces require the D3D11 or D3D12 RHI; launch with -dx11 or -dx12.");
 		UE_LOG(LogNativeWebAffineUi, Error, TEXT("Surface creation rejected: %s"), *OutError);
 		return nullptr;
 	}
@@ -333,7 +327,8 @@ void FAffineUiSurface::OnInputComplete(uint64 DocumentEpoch, TArray<uint64> Clic
 	check(IsInGameThread());
 	if (Impl->bClosed || DocumentEpoch != Impl->DocumentEpoch)
 	{
-		UE_LOG(LogNativeWebInput, VeryVerbose, TEXT("Ignored stale input completion (callback epoch=%llu current=%llu)."),
+		UE_LOG(LogNativeWebInput, VeryVerbose,
+		       TEXT("Ignored stale input completion (callback epoch=%llu current=%llu)."),
 		       static_cast<unsigned long long>(DocumentEpoch),
 		       static_cast<unsigned long long>(Impl->DocumentEpoch));
 		return;
@@ -455,9 +450,33 @@ void FAffineUiSurface::StartPending()
 	                    MoveTemp(TextMutations), MoveTemp(Mutations), Impl->DocumentEpoch, AsShared());
 }
 
-void FAffineUiSurface::OnRenderComplete(uint64 Revision, bool bSuccess)
+void FAffineUiSurface::OnRenderComplete(uint64 Revision, EAffineUiRenderResult Result)
 {
 	check(IsInGameThread());
+	if (Result == EAffineUiRenderResult::Deferred)
+	{
+		if (Impl->bClosed || !Impl->bInFlight || Revision != Impl->PendingRevision)
+		{
+			return;
+		}
+		Impl->bInFlight = false;
+		Impl->bDirty = true;
+		Impl->Pending.Reset();
+		if (!Impl->RetryTicker.IsValid())
+		{
+			TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> WeakSurface = AsShared();
+			Impl->RetryTicker = FTSTicker::GetCoreTicker().AddTicker(
+				FTickerDelegate::CreateLambda([WeakSurface](float)
+				{
+					TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Pinned = WeakSurface.Pin();
+					if (!Pinned || Pinned->Impl->bClosed) { return false; }
+					Pinned->Impl->RetryTicker.Reset();
+					Pinned->StartPending();
+					return false;
+				}), 0.01f);
+		}
+		return;
+	}
 	if (Impl->bClosed || !Impl->bInFlight || Revision != Impl->PendingRevision)
 	{
 		UE_LOG(LogNativeWebRender, VeryVerbose,
@@ -470,11 +489,25 @@ void FAffineUiSurface::OnRenderComplete(uint64 Revision, bool bSuccess)
 	TSharedRef<FAffineUiSurface, ESPMode::ThreadSafe> KeepAlive = AsShared();
 	(void)KeepAlive;
 	Impl->bInFlight = false;
+	const bool bSuccess = Result == EAffineUiRenderResult::Success;
 	if (bSuccess && Revision == Impl->DesiredRevision)
 	{
-		if (Impl->Output.IsValid())
+		TStrongObjectPtr<UTextureRenderTarget2D> PreviousOutput = MoveTemp(Impl->Output);
+		Impl->Output.Reset(Impl->Pending.Get());
+		Impl->OutputDocumentEpoch = Impl->PendingDocumentEpoch;
+		Impl->Pending.Reset();
+		Impl->LastError.Reset();
+		UE_LOG(LogNativeWebRender, VeryVerbose, TEXT("Published render revision=%llu (texture=%dx%d)."),
+		       static_cast<unsigned long long>(Revision), Impl->Output->SizeX, Impl->Output->SizeY);
+		// Hold the surface through callbacks that can close it or drop their last reference.
+		FAffineUiTextureReady Callback = Impl->OnTextureReady;
+		Callback.ExecuteIfBound(Impl->Output.Get());
+		// Queue retirement after presenter callbacks. Their render-thread texture
+		// snapshots are therefore ordered before this fence, while UE's RHI refs
+		// continue to own any already prepared Slate/RDG work.
+		if (!Impl->bClosed && PreviousOutput.IsValid())
 		{
-			Impl->Retired.Add(MakeUnique<FImpl::FRetiredTexture>(Impl->Output.Get()));
+			Impl->Retired.Add(MakeUnique<FImpl::FRetiredTexture>(MoveTemp(PreviousOutput)));
 			if (!Impl->RetirementTicker.IsValid())
 			{
 				TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> WeakSurface = AsShared();
@@ -495,15 +528,6 @@ void FAffineUiSurface::OnRenderComplete(uint64 Revision, bool bSuccess)
 					}), 0.25f);
 			}
 		}
-		Impl->Output.Reset(Impl->Pending.Get());
-		Impl->OutputDocumentEpoch = Impl->PendingDocumentEpoch;
-		Impl->Pending.Reset();
-		Impl->LastError.Reset();
-		UE_LOG(LogNativeWebRender, VeryVerbose, TEXT("Published render revision=%llu (texture=%dx%d)."),
-		       static_cast<unsigned long long>(Revision), Impl->Output->SizeX, Impl->Output->SizeY);
-		// Hold the surface through callbacks that can close it or drop their last reference.
-		FAffineUiTextureReady Callback = Impl->OnTextureReady;
-		Callback.ExecuteIfBound(Impl->Output.Get());
 	}
 	else
 	{
@@ -540,6 +564,11 @@ void FAffineUiSurface::Close()
 	{
 		FTSTicker::RemoveTicker(Impl->RetirementTicker);
 		Impl->RetirementTicker.Reset();
+	}
+	if (Impl->RetryTicker.IsValid())
+	{
+		FTSTicker::RemoveTicker(Impl->RetryTicker);
+		Impl->RetryTicker.Reset();
 	}
 	Impl->Renderer.Shutdown();
 	Impl->LiveTextUpdates.Reset();

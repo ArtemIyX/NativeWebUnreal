@@ -1,5 +1,5 @@
 /**
- * @file Source/NativeWeb/Private/AffineUiSurface.h
+ * @file Source/NativeWeb/Private/AffineUI/AffineUiSurface.h
  * @brief Declares affine ui surface for the NativeWeb module.
  * @details The Win64 D3D11 view runtime; QuickJS and view lifecycle are game-thread owned.
  * @ingroup NativeWeb
@@ -22,12 +22,13 @@ class FAffineUiSurfaceRenderer;
 struct NATIVEWEB_API FAffineUiContent
 {
 	FString Html;
-/**
- * @brief Defines the nativeweb api data structure.
- * @ingroup NativeWeb
- */
+	/**
+	 * @brief Defines the nativeweb api data structure.
+	 * @ingroup NativeWeb
+	 */
 	FString Css;
 };
+
 /**
  * @brief Defines the e affine ui mutation kind enumeration.
  * @ingroup NativeWeb
@@ -35,10 +36,10 @@ struct NATIVEWEB_API FAffineUiContent
 
 /** Copied text update applied on the AffineUI renderer's owner lane. */
 struct NATIVEWEB_API FAffineUiTextMutation
-/**
- * @brief Defines the nativeweb api data structure.
- * @ingroup NativeWeb
- */
+	/**
+	 * @brief Defines the nativeweb api data structure.
+	 * @ingroup NativeWeb
+	 */
 {
 	FString ElementId;
 	FString Text;
@@ -48,6 +49,15 @@ enum class EAffineUiMutationKind : uint8
 {
 	MountRoot, CreateElement, CreateSvgElement, CreateText, CreateComment, InsertBefore, Remove,
 	SetText, SetAttribute, RemoveAttribute, RegisterClickHandler
+};
+
+/** Completion status for a submitted AffineUI frame. */
+enum class EAffineUiRenderResult : uint8
+{
+	Success,
+	Deferred,
+	Failure,
+	Pending
 };
 
 /** Copied game-thread command; strings and logical IDs cross to the RHI lane. */
@@ -63,10 +73,10 @@ struct NATIVEWEB_API FAffineUiMutation
 };
 
 enum class EAffineUiInputKind : uint8
-/**
- * @brief Defines the nativeweb api data structure.
- * @ingroup NativeWeb
- */
+	/**
+	 * @brief Defines the nativeweb api data structure.
+	 * @ingroup NativeWeb
+	 */
 {
 	MouseMove, MouseDown, MouseUp, MouseWheel, KeyDown, KeyUp, FocusGained, FocusLost
 };
@@ -141,16 +151,16 @@ public:
  * @endcode
  */
 	bool Resize(FIntPoint PixelSize, float DpiScale = 1.0f);
-/**
- * @brief Performs the request redraw operation.
- * @return True when the operation succeeds or accepts the request; false when it fails or rejects it.
- * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
- * @par Example
- * Invocation example; substitute arguments that satisfy the function contract.
- * @code{.cpp}
- * RequestRedraw();
- * @endcode
- */
+	/**
+	 * @brief Performs the request redraw operation.
+	 * @return True when the operation succeeds or accepts the request; false when it fails or rejects it.
+	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
+	 * @par Example
+	 * Invocation example; substitute arguments that satisfy the function contract.
+	 * @code{.cpp}
+	 * RequestRedraw();
+	 * @endcode
+	 */
 
 	bool RequestRedraw();
 	/** Queue textContent replacement for an existing element ID without replacing HTML. True means queued, not yet rendered.
@@ -165,54 +175,54 @@ public:
  * @endcode
  */
 	bool SetTextById(const FString& ElementId, const FString& Text);
-/**
- * @brief Queues mutation.
-* @param Mutation Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
- * @return True when the operation succeeds or accepts the request; false when it fails or rejects it.
- * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
- * @par Example
- * Invocation example; substitute arguments that satisfy the function contract.
- * @code{.cpp}
- * QueueMutation(Mutation);
- * @endcode
- */
+	/**
+	 * @brief Queues mutation.
+	* @param Mutation Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+	 * @return True when the operation succeeds or accepts the request; false when it fails or rejects it.
+	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
+	 * @par Example
+	 * Invocation example; substitute arguments that satisfy the function contract.
+	 * @code{.cpp}
+	 * QueueMutation(Mutation);
+	 * @endcode
+	 */
 
 	bool QueueMutation(const FAffineUiMutation& Mutation);
-/**
- * @brief Returns document epoch.
- * @return The resulting count, size, index, hash, or numeric value.
- * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
- * @par Example
- * Invocation example; substitute arguments that satisfy the function contract.
- * @code{.cpp}
- * GetDocumentEpoch();
- * @endcode
- */
+	/**
+	 * @brief Returns document epoch.
+	 * @return The resulting count, size, index, hash, or numeric value.
+	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
+	 * @par Example
+	 * Invocation example; substitute arguments that satisfy the function contract.
+	 * @code{.cpp}
+	 * GetDocumentEpoch();
+	 * @endcode
+	 */
 
 	uint64 GetDocumentEpoch() const;
-/**
- * @brief Queues input.
-* @param Input Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
- * @return True when the operation succeeds or accepts the request; false when it fails or rejects it.
- * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
- * @par Example
- * Invocation example; substitute arguments that satisfy the function contract.
- * @code{.cpp}
- * QueueInput(Input);
- * @endcode
- */
+	/**
+	 * @brief Queues input.
+	* @param Input Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+	 * @return True when the operation succeeds or accepts the request; false when it fails or rejects it.
+	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
+	 * @par Example
+	 * Invocation example; substitute arguments that satisfy the function contract.
+	 * @code{.cpp}
+	 * QueueInput(Input);
+	 * @endcode
+	 */
 
 	bool QueueInput(const FAffineUiInput& Input);
-/**
- * @brief Sets on click.
- * @param Callback Caller-supplied callback invoked according to the owning type contract.
- * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
- * @par Example
- * Invocation example; substitute arguments that satisfy the function contract.
- * @code{.cpp}
- * SetOnClick(Callback);
- * @endcode
- */
+	/**
+	 * @brief Sets on click.
+	 * @param Callback Caller-supplied callback invoked according to the owning type contract.
+	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
+	 * @par Example
+	 * Invocation example; substitute arguments that satisfy the function contract.
+	 * @code{.cpp}
+	 * SetOnClick(Callback);
+	 * @endcode
+	 */
 
 	void SetOnClick(FAffineUiClick Callback);
 
@@ -236,93 +246,93 @@ public:
  * @endcode
  */
 	void SetOnError(FAffineUiSurfaceError Callback);
-/**
- * @brief Returns output texture.
- * @return The requested object/result, or null when unavailable.
- * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
- * @par Example
- * Invocation example; substitute arguments that satisfy the function contract.
- * @code{.cpp}
- * GetOutputTexture();
- * @endcode
- */
+	/**
+	 * @brief Returns output texture.
+	 * @return The requested object/result, or null when unavailable.
+	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
+	 * @par Example
+	 * Invocation example; substitute arguments that satisfy the function contract.
+	 * @code{.cpp}
+	 * GetOutputTexture();
+	 * @endcode
+	 */
 
 	UTextureRenderTarget2D* GetOutputTexture() const;
-/**
- * @brief Returns last error.
- * @return The resulting text or identifier.
- * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
- * @par Example
- * Invocation example; substitute arguments that satisfy the function contract.
- * @code{.cpp}
- * GetLastError();
- * @endcode
- */
+	/**
+	 * @brief Returns last error.
+	 * @return The resulting text or identifier.
+	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
+	 * @par Example
+	 * Invocation example; substitute arguments that satisfy the function contract.
+	 * @code{.cpp}
+	 * GetLastError();
+	 * @endcode
+	 */
 
 	FString GetLastError() const;
-/**
- * @brief Closes this resource and releases its owned state.
- * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
- * @par Example
- * Invocation example; substitute arguments that satisfy the function contract.
- * @code{.cpp}
- * Close();
- * @endcode
- * @warning This call releases or replaces owned state; ensure dependent work has stopped before teardown.
- */
+	/**
+	 * @brief Closes this resource and releases its owned state.
+	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
+	 * @par Example
+	 * Invocation example; substitute arguments that satisfy the function contract.
+	 * @code{.cpp}
+	 * Close();
+	 * @endcode
+	 * @warning This call releases or replaces owned state; ensure dependent work has stopped before teardown.
+	 */
 
 	void Close();
 
 private:
 	friend class FAffineUiSurfaceRenderer;
 	FAffineUiSurface();
-/**
- * @brief Performs the start pending operation.
- * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
- * @par Example
- * Invocation example; substitute arguments that satisfy the function contract.
- * @code{.cpp}
- * StartPending();
- * @endcode
- */
+	/**
+	 * @brief Performs the start pending operation.
+	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
+	 * @par Example
+	 * Invocation example; substitute arguments that satisfy the function contract.
+	 * @code{.cpp}
+	 * StartPending();
+	 * @endcode
+	 */
 
 	void StartPending();
-/**
- * @brief Performs the request input redraw operation.
- * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
- * @par Example
- * Invocation example; substitute arguments that satisfy the function contract.
- * @code{.cpp}
- * RequestInputRedraw();
- * @endcode
- */
+	/**
+	 * @brief Performs the request input redraw operation.
+	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
+	 * @par Example
+	 * Invocation example; substitute arguments that satisfy the function contract.
+	 * @code{.cpp}
+	 * RequestInputRedraw();
+	 * @endcode
+	 */
 
 	void RequestInputRedraw();
-/**
- * @brief Processes the render complete.
-* @param Revision Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
-* @param bSuccess Boolean option controlling this operation.
- * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
- * @par Example
- * Invocation example; substitute arguments that satisfy the function contract.
- * @code{.cpp}
- * OnRenderComplete(Revision, bSuccess);
- * @endcode
- */
+	/**
+	 * @brief Processes the render complete.
+	* @param Revision Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+	* @param bSuccess Boolean option controlling this operation.
+	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
+	 * @par Example
+	 * Invocation example; substitute arguments that satisfy the function contract.
+	 * @code{.cpp}
+	 * OnRenderComplete(Revision, Result);
+	 * @endcode
+	 */
 
-	void OnRenderComplete(uint64 Revision, bool bSuccess);
-/**
- * @brief Processes the input complete.
-* @param DocumentEpoch Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
-* @param Clicks Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
-* @param bNeedsRedraw Boolean option controlling this operation.
- * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
- * @par Example
- * Invocation example; substitute arguments that satisfy the function contract.
- * @code{.cpp}
- * OnInputComplete(DocumentEpoch, Clicks, bNeedsRedraw);
- * @endcode
- */
+	void OnRenderComplete(uint64 Revision, EAffineUiRenderResult Result);
+	/**
+	 * @brief Processes the input complete.
+	* @param DocumentEpoch Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+	* @param Clicks Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+	* @param bNeedsRedraw Boolean option controlling this operation.
+	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
+	 * @par Example
+	 * Invocation example; substitute arguments that satisfy the function contract.
+	 * @code{.cpp}
+	 * OnInputComplete(DocumentEpoch, Clicks, bNeedsRedraw);
+	 * @endcode
+	 */
 
 	void OnInputComplete(uint64 DocumentEpoch, TArray<uint64> Clicks, bool bNeedsRedraw);
 	class FImpl;

@@ -2,8 +2,9 @@
 
 #if WITH_DEV_AUTOMATION_TESTS && PLATFORM_WINDOWS
 
-#include "AffineUiScriptInstance.h"
+
 #include "DynamicRHI.h"
+#include "AffineUI/AffineUiScriptInstance.h"
 #include "Misc/FileHelper.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Paths.h"

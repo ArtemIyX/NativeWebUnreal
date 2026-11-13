@@ -1,5 +1,3 @@
-
-
 #include "AffineUiScriptInstance.h"
 #include "NativeWeb.h"
 
@@ -8,8 +6,6 @@
 
 namespace
 {
-
-
 	bool HasEmbeddedNull(const FString& Value)
 	{
 		return FCString::Strlen(*Value) != Value.Len();
@@ -19,7 +15,8 @@ namespace
 TUniquePtr<FAffineUiScriptInstance> FAffineUiScriptInstance::Create(const FAffineUiSurfaceDesc& Desc, FString& OutError)
 {
 	check(IsInGameThread());
-	UE_LOG(LogNativeWebScript, Log, TEXT("Creating QuickJS bridge (surface=%dx%d)."), Desc.PixelSize.X, Desc.PixelSize.Y);
+	UE_LOG(LogNativeWebScript, Log, TEXT("Creating QuickJS bridge (surface=%dx%d)."), Desc.PixelSize.X,
+	       Desc.PixelSize.Y);
 	OutError.Reset();
 	TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> NewSurface = FAffineUiSurface::Create(Desc, OutError);
 	if (!NewSurface)
@@ -187,8 +184,6 @@ bool FAffineUiScriptInstance::PumpJobs(int32 MaxJobs, int32& OutExecuted, bool& 
 
 namespace
 {
-
-
 	int64 MessageSize(const FNativeWebMessage& Message)
 	{
 		if (Message.Type == ENativeWebPayloadType::PAYLOAD_BYTES) return Message.Bytes.Num();
@@ -243,7 +238,8 @@ int32 FAffineUiScriptInstance::DrainMessagesFromJavaScript(TArray<FNativeWebMess
 	}
 	if (Count > 0)
 	{
-		UE_LOG(LogNativeWebMessaging, VeryVerbose, TEXT("Drained %d JS-to-Unreal message(s); inbound remains=%d bytes=%lld."),
+		UE_LOG(LogNativeWebMessaging, VeryVerbose,
+		       TEXT("Drained %d JS-to-Unreal message(s); inbound remains=%d bytes=%lld."),
 		       Count, InboundMessages.Num(), InboundBytes);
 	}
 	return Count;
@@ -266,7 +262,8 @@ int32 FAffineUiScriptInstance::DrainMessagesToJavaScript(TArray<FNativeWebMessag
 	}
 	if (Count > 0)
 	{
-		UE_LOG(LogNativeWebMessaging, VeryVerbose, TEXT("Drained %d Unreal-to-JS message(s); outbound remains=%d bytes=%lld."),
+		UE_LOG(LogNativeWebMessaging, VeryVerbose,
+		       TEXT("Drained %d Unreal-to-JS message(s); outbound remains=%d bytes=%lld."),
 		       Count, OutboundMessages.Num(), OutboundBytes);
 	}
 	return Count;
@@ -306,15 +303,11 @@ bool FAffineUiScriptInstance::DeliverMessageToJavaScript(const FNativeWebMessage
 	JSValue Item = JS_NewObject(Context);
 	if (!Message.Channel.IsNone())
 	{
-
-
 		const FTCHARToUTF8 Channel(*Message.Channel.ToString());
 		JS_SetPropertyStr(Context, Item, "channel", JS_NewStringLen(Context, Channel.Get(), Channel.Length()));
 	}
 	if (Message.Type == ENativeWebPayloadType::PAYLOAD_STRING)
 	{
-
-
 		const FTCHARToUTF8 Value(*Message.String, Message.String.Len());
 		JS_SetPropertyStr(Context, Item, "type", JS_NewString(Context, "string"));
 		JS_SetPropertyStr(Context, Item, "value", JS_NewStringLen(Context, Value.Get(), Value.Length()));
@@ -452,8 +445,9 @@ JSValue FAffineUiScriptInstance::PostBytes(JSContext* Context, JSValueConst, int
 	else
 	{
 		JSValue ExactBuffer = JS_GetTypedArrayBuffer(Context, Args[0], nullptr, nullptr, nullptr);
-		if (JS_IsException(ExactBuffer)) return JS_ThrowTypeError(
-			Context, "value must be an ArrayBuffer or ArrayBufferView");
+		if (JS_IsException(ExactBuffer))
+			return JS_ThrowTypeError(
+				Context, "value must be an ArrayBuffer or ArrayBufferView");
 		JSValue OffsetValue = JS_GetPropertyStr(Context, Args[0], "byteOffset");
 		JSValue LengthValue = JS_GetPropertyStr(Context, Args[0], "byteLength");
 		uint64 Offset = 0, ViewLength = 0;
@@ -744,8 +738,6 @@ void FAffineUiScriptInstance::Close()
 	       InboundMessages.Num(), OutboundMessages.Num());
 	bClosing = true;
 	{
-
-
 		FScopeLock Lock(&MessageMutex);
 		InboundMessages.Reset();
 		OutboundMessages.Reset();

@@ -1,18 +1,14 @@
-
-
 #if WITH_DEV_AUTOMATION_TESTS
 
-#include "AffineUiSurface.h"
+#include "AffineUI/AffineUiSurface.h"
 #include "DynamicRHI.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Guid.h"
 #include "Misc/Paths.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAffineUiSurfaceLifecycleTest,
-	"NativeWeb.AffineUi.Surface.Lifecycle",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-
+                                 "NativeWeb.AffineUi.Surface.Lifecycle",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FAffineUiSurfaceLifecycleTest::RunTest(const FString& Parameters)
 {
@@ -38,11 +34,13 @@ bool FAffineUiSurfaceLifecycleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("A valid resize is accepted"), Surface->Resize(FIntPoint(320, 160), 1.0f));
 	TestTrue(TEXT("A redraw is accepted"), Surface->RequestRedraw());
 	UTextureRenderTarget2D* PreviousOutput = Surface->GetOutputTexture();
-	const FString Missing = FPaths::Combine(FPaths::ProjectSavedDir(), FGuid::NewGuid().ToString(), TEXT("missing.html"));
+	const FString Missing = FPaths::Combine(FPaths::ProjectSavedDir(), FGuid::NewGuid().ToString(),
+	                                        TEXT("missing.html"));
 	TestFalse(TEXT("A missing HTML file is reported"), Surface->LoadContentFromFiles(Missing, Missing, Error));
 	TestFalse(TEXT("A missing file produces an error"), Error.IsEmpty());
 	TestTrue(TEXT("Failed loading keeps the published output"), Surface->GetOutputTexture() == PreviousOutput);
-	const FString ExampleHtml = FPaths::Combine(FPaths::ProjectPluginsDir(), TEXT("NativeWeb/Resources/Demo/viewport.html"));
+	const FString ExampleHtml = FPaths::Combine(FPaths::ProjectPluginsDir(),
+	                                            TEXT("NativeWeb/Resources/Demo/viewport.html"));
 	if (FPaths::FileExists(ExampleHtml))
 	{
 		TestFalse(TEXT("A missing CSS file is reported"), Surface->LoadContentFromFiles(ExampleHtml, Missing, Error));

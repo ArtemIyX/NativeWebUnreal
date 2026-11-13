@@ -13,7 +13,7 @@
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
 #include "NativeWeb.h"
-#include "NativeWebInputRouting.h"
+#include "Input/NativeWebInputRouting.h"
 #include "NativeWebView.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
@@ -118,9 +118,9 @@ namespace
 		Parameters->WebTexture = WebTexture;
 		// Use one texel per pixel at native size and blend texels only when scaling.
 		const bool bNativeSize = DrawRect.Size() == WebRHI->GetDesc().Extent;
-		Parameters->WebSampler = bNativeSize ?
-			TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI() :
-			TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+		Parameters->WebSampler = bNativeSize
+			                         ? TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI()
+			                         : TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 		Parameters->DrawRect = FVector4f(static_cast<float>(DrawRect.Min.X),
 		                                 static_cast<float>(DrawRect.Min.Y),
 		                                 static_cast<float>(DrawRect.Width()),
@@ -411,6 +411,13 @@ public:
 	{
 		if (!bInVisible && FSlateApplication::IsInitialized()) ReleaseInput(FSlateApplication::Get());
 		bEnabled = bInVisible;
+		if (bEnabled)
+		{
+			// GPU presentation may become active after the surface's initial
+			// descriptor render. Synchronize the surface to the actual viewport
+			// before the first visible frame instead of upscaling 480x360.
+			UpdateSurfaceSize();
+		}
 	}
 
 	void Shutdown(const TSharedPtr<FInputAdapter>& Self)
@@ -550,6 +557,9 @@ private:
 		const float Dpi = FMath::Clamp(LayoutScale * Fit, 0.01f, 8.0f);
 		if (Desired != LastSize || !FMath::IsNearlyEqual(Dpi, LastDpi))
 		{
+			UE_LOG(LogNativeWebViewport, Display,
+			       TEXT("GPU presenter syncing surface to view rect=%dx%d at %dx%d (dpi=%.2f)."),
+			       Rect.Width(), Rect.Height(), Desired.X, Desired.Y, Dpi);
 			if (UNativeWebView* Pinned = View.Get()) Pinned->Resize(Desired, Dpi);
 			LastSize = Desired;
 			LastDpi = Dpi;
@@ -616,9 +626,9 @@ bool FNativeWebGpuPresenter::Initialize(UNativeWebView* View, ULocalPlayer* Play
 		OutReason = TEXT("The view, local player, or output texture is unavailable.");
 		return false;
 	}
-	if (!GDynamicRHI || FCString::Stricmp(GDynamicRHI->GetName(), TEXT("D3D11")) != 0)
+	if (!GDynamicRHI || (!IsRHID3D11() && !IsRHID3D12()))
 	{
-		OutReason = TEXT("The GPU viewport presenter currently supports only D3D11.");
+		OutReason = TEXT("The GPU viewport presenter supports only the D3D11 and D3D12 RHIs.");
 		return false;
 	}
 	UGameViewportClient* ViewportClient = Player->ViewportClient;

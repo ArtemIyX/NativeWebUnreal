@@ -1,5 +1,5 @@
 /**
- * @file Source/NativeWeb/Private/AffineUiScriptInstance.h
+ * @file Source/NativeWeb/Private/AffineUI/AffineUiScriptInstance.h
  * @brief Declares affine ui script instance for the NativeWeb module.
  * @details The Win64 D3D11 view runtime; QuickJS and view lifecycle are game-thread owned.
  * @ingroup NativeWeb

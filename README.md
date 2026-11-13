@@ -22,6 +22,8 @@ viewport and exchange opaque strings or bytes with its JavaScript runtime. The
 other runtime modules provide independent dispatch, image HTTP, and WebSocket
 services.
 
+This repository is a fork of [WebUserInterfaceUnreal](https://github.com/ArtemIyX/WebUserInterfaceUnreal).
+
 ## Features
 
 - **Reusable native views:** create, find, show, hide, attach, detach, resize,
@@ -53,6 +55,15 @@ services.
 
 The modules are enabled independently in `NativeWeb.uplugin`. Starting one
 module's subsystem does not start another module's services.
+
+## Dependency plugins
+
+NativeWeb requires these plugins to provide its embedded web runtime:
+
+| Plugin | Responsibility | Repository |
+| --- | --- | --- |
+| `AffineUnreal` | AffineUI rendering, native surfaces, and D3D11/D3D12 presentation support | [ArtemIyX/AffineUnreal](https://github.com/ArtemIyX/AffineUnreal) |
+| `QuickJSUnreal` | Embedded JavaScript execution for packaged scripts, DOM updates, and messaging | [ArtemIyX/QuickJSUnreal](https://github.com/ArtemIyX/QuickJSUnreal) |
 
 ```mermaid
 flowchart LR

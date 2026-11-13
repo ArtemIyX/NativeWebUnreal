@@ -411,6 +411,13 @@ public:
 	{
 		if (!bInVisible && FSlateApplication::IsInitialized()) ReleaseInput(FSlateApplication::Get());
 		bEnabled = bInVisible;
+		if (bEnabled)
+		{
+			// GPU presentation may become active after the surface's initial
+			// descriptor render. Synchronize the surface to the actual viewport
+			// before the first visible frame instead of upscaling 480x360.
+			UpdateSurfaceSize();
+		}
 	}
 
 	void Shutdown(const TSharedPtr<FInputAdapter>& Self)
@@ -550,6 +557,9 @@ private:
 		const float Dpi = FMath::Clamp(LayoutScale * Fit, 0.01f, 8.0f);
 		if (Desired != LastSize || !FMath::IsNearlyEqual(Dpi, LastDpi))
 		{
+			UE_LOG(LogNativeWebViewport, Display,
+			       TEXT("GPU presenter syncing surface to view rect=%dx%d at %dx%d (dpi=%.2f)."),
+			       Rect.Width(), Rect.Height(), Desired.X, Desired.Y, Dpi);
 			if (UNativeWebView* Pinned = View.Get()) Pinned->Resize(Desired, Dpi);
 			LastSize = Desired;
 			LastDpi = Dpi;

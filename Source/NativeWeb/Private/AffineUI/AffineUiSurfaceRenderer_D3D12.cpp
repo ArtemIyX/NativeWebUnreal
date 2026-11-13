@@ -78,6 +78,7 @@ public:
 	{
 		bShuttingDown.Store(true);
 		Slots.Reset();
+		RetiredSlots.Reset();
 	}
 
 	EAcquireResult AcquireSlot(FIntPoint Size, TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>& OutSlot,
@@ -89,22 +90,22 @@ public:
 			OutError = TEXT("The NativeWeb D3D12 bridge is shutting down.");
 			return EAcquireResult::Failure;
 		}
+		PollCompletedSlots(Slots);
+		CollectRetiredSlots();
 		if (Size != CurrentSize)
 		{
-			for (const TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>& Slot : Slots)
+			UE_LOG(LogNativeWebRender, Display,
+			       TEXT("D3D12 transfer size changed from %dx%d to %dx%d; retiring the old slot generation."),
+			       CurrentSize.X, CurrentSize.Y, Size.X, Size.Y);
+			for (TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>& Slot : Slots)
 			{
-				if (Slot->bBusy) return EAcquireResult::Busy;
+				RetiredSlots.Add(MoveTemp(Slot));
 			}
 			Slots.Reset();
 			if (!CreateSlots(Size, OutError)) return EAcquireResult::Failure;
 		}
 		for (const TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>& Slot : Slots)
 		{
-			if (Slot->bBusy && Slot->UnrealCopyFence && Slot->UnrealCopyFence->Poll())
-			{
-				Slot->UnrealCopyFence.SafeRelease();
-				Slot->bBusy = false;
-			}
 			if (!Slot->bBusy)
 			{
 				Slot->bBusy = true;
@@ -219,26 +220,54 @@ public:
 			const double StartTime = FPlatformTime::Seconds();
 			for (;;)
 			{
+				FNativeWebD3D12BridgeImpl::PollCompletedSlots(Self->Slots);
+				Self->CollectRetiredSlots();
 				bool bAllRetired = true;
 				for (const TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>& Slot : Self->Slots)
 				{
-					if (!Slot->bBusy) continue;
-					if (Slot->UnrealCopyFence && Slot->UnrealCopyFence->Poll())
+					if (Slot->bBusy)
 					{
-						Slot->UnrealCopyFence.SafeRelease();
-						Slot->bBusy = false;
-						continue;
+						bAllRetired = false;
+						break;
 					}
-					bAllRetired = false;
 				}
+				bAllRetired = bAllRetired && Self->RetiredSlots.IsEmpty();
 				if (bAllRetired || (FPlatformTime::Seconds() - StartTime) > 5.0) break;
 				FPlatformProcess::SleepNoStats(0.001f);
 			}
 			Self->Slots.Reset();
+			Self->RetiredSlots.Reset();
 		});
 	}
 
 private:
+	static void PollCompletedSlots(TArray<TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>>& InSlots)
+	{
+		for (const TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>& Slot : InSlots)
+		{
+			if (Slot->bBusy && Slot->UnrealCopyFence && Slot->UnrealCopyFence->Poll())
+			{
+				Slot->UnrealCopyFence.SafeRelease();
+				Slot->bBusy = false;
+			}
+		}
+	}
+
+	void CollectRetiredSlots()
+	{
+		RetiredSlots.RemoveAll([](const TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>& Slot)
+		{
+			if (!Slot->bBusy) return true;
+			if (Slot->UnrealCopyFence && Slot->UnrealCopyFence->Poll())
+			{
+				Slot->UnrealCopyFence.SafeRelease();
+				Slot->bBusy = false;
+				return true;
+			}
+			return false;
+		});
+	}
+
 	bool Initialize(FIntPoint Size, FString& OutError)
 	{
 		if (!IsRHID3D12())
@@ -443,6 +472,7 @@ private:
 	TRefCountPtr<ID3D12Fence> ReadyFence12;
 	ID3D12Device* Device12 = nullptr;
 	TArray<TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>> Slots;
+	TArray<TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>> RetiredSlots;
 	FIntPoint CurrentSize = FIntPoint::ZeroValue;
 	uint32 NodeMask = 0;
 	uint64 NextProducerValue = 0;

@@ -3,11 +3,11 @@
 PROJECT_NAME           = "NativeWeb"
 PROJECT_BRIEF          = "Unreal Engine native web runtime and networking modules"
 OUTPUT_DIRECTORY       = Intermediate/Doxygen
-INPUT                  = Source Docs
+INPUT                  = Source README.md
 RECURSIVE              = YES
 FILE_PATTERNS          = *.h *.cpp *.cs *.md
 EXTENSION_MAPPING      = .cs=C#
-USE_MDFILE_AS_MAINPAGE  = Docs/NativeWeb-API.md
+USE_MDFILE_AS_MAINPAGE  = README.md
 
 GENERATE_HTML           = YES
 HTML_OUTPUT             = html

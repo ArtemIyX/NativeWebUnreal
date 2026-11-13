@@ -85,6 +85,7 @@ public:
 	uint64 OutputDocumentEpoch = 0;
 	TMap<FString, FString> LiveTextUpdates;
 	TArray<FAffineUiMutation> PendingMutations;
+	FAffineUiDeferredMutationBatch DeferredMutations;
 	uint64 DocumentEpoch = 1;
 	bool bInFlight = false;
 	bool bDirty = true;
@@ -442,12 +443,11 @@ void FAffineUiSurface::StartPending()
 		Mutation.ElementId = Pair.Key;
 		Mutation.Text = Pair.Value;
 	}
-	TArray<FAffineUiMutation> Mutations = MoveTemp(Impl->PendingMutations);
-	Impl->PendingMutations.Reset();
+	Impl->DeferredMutations.Begin(MoveTemp(Impl->PendingMutations), Impl->DocumentEpoch);
 	Impl->Renderer.Draw(Target->GameThread_GetRenderTargetResource(), Impl->Desired.PixelSize,
 	                    Impl->Desired.DpiScale, Impl->Desired.ClearColor, Impl->Desired.Content,
 	                    Impl->FontAssets.ToSharedRef(), Impl->PendingRevision,
-	                    MoveTemp(TextMutations), MoveTemp(Mutations), Impl->DocumentEpoch, AsShared());
+	                    MoveTemp(TextMutations), Impl->DeferredMutations.GetInFlight(), Impl->DocumentEpoch, AsShared());
 }
 
 void FAffineUiSurface::OnRenderComplete(uint64 Revision, EAffineUiRenderResult Result)
@@ -460,6 +460,7 @@ void FAffineUiSurface::OnRenderComplete(uint64 Revision, EAffineUiRenderResult R
 			return;
 		}
 		Impl->bInFlight = false;
+		Impl->DeferredMutations.RestoreIfDeferred(Impl->DocumentEpoch, Impl->PendingMutations);
 		Impl->bDirty = true;
 		Impl->Pending.Reset();
 		if (!Impl->RetryTicker.IsValid())
@@ -489,6 +490,7 @@ void FAffineUiSurface::OnRenderComplete(uint64 Revision, EAffineUiRenderResult R
 	TSharedRef<FAffineUiSurface, ESPMode::ThreadSafe> KeepAlive = AsShared();
 	(void)KeepAlive;
 	Impl->bInFlight = false;
+	Impl->DeferredMutations.MarkConsumed();
 	const bool bSuccess = Result == EAffineUiRenderResult::Success;
 	if (bSuccess && Revision == Impl->DesiredRevision)
 	{

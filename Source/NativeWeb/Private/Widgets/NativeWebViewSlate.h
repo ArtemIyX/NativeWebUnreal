@@ -16,6 +16,7 @@
  * @ingroup NativeWeb
  */
 class UNativeWebView;
+class ULocalPlayer;
 class UTextureRenderTarget2D;
 class SImage;
 
@@ -28,6 +29,7 @@ public:
 		}
 
 		SLATE_ARGUMENT(UNativeWebView*, View)
+		SLATE_ARGUMENT(ULocalPlayer*, Player)
 		SLATE_ARGUMENT(FSurfacePtr, Surface)
 	SLATE_END_ARGS()
 
@@ -77,7 +79,7 @@ public:
 	 * @endcode
 	 */
 
-	void ReleaseInput();
+	void ReleaseInput(bool bPreserveKeyboardFocus = false);
 	/**
 	 * @brief Performs the supports keyboard focus operation.
 	 * @return True when the operation succeeds or accepts the request; false when it fails or rejects it.
@@ -252,6 +254,8 @@ public:
 	 */
 
 	virtual FReply OnKeyUp(const FGeometry&, const FKeyEvent&) override;
+	/** Processes a character event for the active owning viewport console. */
+	virtual FReply OnKeyChar(const FGeometry&, const FCharacterEvent&) override;
 
 private:
 	/**
@@ -296,6 +300,7 @@ private:
 
 	void Forward(const FAffineUiInput&) const;
 	TWeakObjectPtr<UNativeWebView> View;
+	TWeakObjectPtr<ULocalPlayer> Player;
 	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface;
 	TStrongObjectPtr<UTextureRenderTarget2D> Target;
 	TSharedPtr<SImage> Image;

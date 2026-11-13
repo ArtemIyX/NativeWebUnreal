@@ -103,9 +103,11 @@ UNativeWebView* CreateHudView(ULocalPlayer* LocalPlayer)
         return nullptr;
     }
 
+    FNativeWebSurfaceConfig Surface;
+    FNativeWebPresentationConfig Presentation;
     FNativeWebError Error;
     UNativeWebView* View = NativeWeb->CreatePackagedView(
-        FName(TEXT("Hud")), TEXT("NativeWeb/Hud"), Error);
+        FName(TEXT("Hud")), TEXT("NativeWeb/Hud"), Surface, Presentation, Error);
     if (!View)
     {
         UE_LOG(LogNativeWebSubsystem, Error, TEXT("View creation failed (%s): %s"),
@@ -118,9 +120,11 @@ UNativeWebView* CreateHudView(ULocalPlayer* LocalPlayer)
 `CreatePackagedView` reads `ui.css`, evaluates `ui.js`, and creates the
 `<div id="app"></div>` shell. Bundle the JavaScript needed at runtime into
 `ui.js`; arbitrary URL navigation and ES module loading are not part of the
-current view API. For inline documents or custom sizing, use `CreateView` and
-`FNativeWebViewOptions` instead. Full lifecycle, messaging, Blueprint, and
-packaging guidance is in the [NativeWeb module README](Source/NativeWeb/README.md).
+current view API. Use `FNativeWebSurfaceConfig` and
+`FNativeWebPresentationConfig` to select size, DPI, presentation, fallback,
+and z-order. For inline documents, use `CreateInlineView` with explicit HTML
+and CSS. Full lifecycle, presentation, messaging, Blueprint, and local GPU
+validation steps are in the [NativeWeb module README](Source/NativeWeb/README.md).
 
 ## Platform and runtime limits
 

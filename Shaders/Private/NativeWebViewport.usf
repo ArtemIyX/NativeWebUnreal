@@ -1,0 +1,35 @@
+#include "/Engine/Public/Platform.ush"
+
+struct FVertexOutput
+{
+	float4 Position : SV_Position;
+};
+
+FVertexOutput MainVS(uint VertexId : SV_VertexID)
+{
+	FVertexOutput Output;
+	float2 Position = float2((VertexId << 1) & 2, VertexId & 2);
+	Output.Position = float4(Position * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+	return Output;
+}
+
+Texture2D WebTexture;
+SamplerState WebSampler;
+float4 DrawRect;
+uint EncodeOutputSrgb;
+
+float4 MainPS(FVertexOutput Input) : SV_Target0
+{
+	// SV_Position already includes the half-pixel offset to the pixel center.
+	float2 Uv = saturate((Input.Position.xy - DrawRect.xy) / DrawRect.zw);
+	float3 Color = WebTexture.SampleLevel(WebSampler, Uv, 0).rgb;
+	// The sRGB SRV returns linear RGB. Encode only if the target view won't.
+	if (EncodeOutputSrgb != 0)
+	{
+		Color = saturate(Color);
+		Color = select(Color > 0.0031308,
+		               1.055 * pow(Color, 1.0 / 2.4) - 0.055,
+		               12.92 * Color);
+	}
+	return float4(Color, 1.0);
+}

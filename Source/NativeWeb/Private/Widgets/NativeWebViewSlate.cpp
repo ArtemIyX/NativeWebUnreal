@@ -3,8 +3,10 @@
 #include "Widgets/NativeWebViewSlate.h"
 
 #include "Engine/TextureRenderTarget2D.h"
+#include "Input/Events.h"
 #include "InputCoreTypes.h"
 #include "NativeWeb.h"
+#include "NativeWebInputRouting.h"
 #include "NativeWebView.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Widgets/Images/SImage.h"
@@ -12,6 +14,7 @@
 void SNativeWebView::Construct(const FArguments& Args)
 {
 	View = Args._View;
+	Player = Args._Player;
 	Surface = Args._Surface;
 	UNativeWebView* ViewObject = View.Get();
 	UE_LOG(LogNativeWebViewport, Verbose, TEXT("Constructing Slate attachment (view=%s surface=%s)."),
@@ -41,7 +44,7 @@ void SNativeWebView::SetVisible(bool bInVisible)
 	SetVisibility(bVisible ? EVisibility::Visible : EVisibility::Collapsed);
 }
 
-void SNativeWebView::ReleaseInput()
+void SNativeWebView::ReleaseInput(const bool bPreserveKeyboardFocus)
 {
 	UE_LOG(LogNativeWebInput, Verbose, TEXT("Releasing Slate input state (pointerPressed=%s mouseCapture=%s keyboardFocus=%s)."),
 	       bPointerPressed ? TEXT("true") : TEXT("false"), HasMouseCapture() ? TEXT("true") : TEXT("false"),
@@ -52,6 +55,7 @@ void SNativeWebView::ReleaseInput()
 		Forward({EAffineUiInputKind::MouseUp, FVector2D(-1.0, -1.0)});
 	}
 	if (HasMouseCapture()) FSlateApplication::Get().ReleaseAllPointerCapture();
+	if (bPreserveKeyboardFocus) return;
 	if (HasKeyboardFocus()) FSlateApplication::Get().ClearKeyboardFocus(EFocusCause::SetDirectly);
 	else Forward({EAffineUiInputKind::FocusLost});
 }
@@ -59,6 +63,11 @@ void SNativeWebView::ReleaseInput()
 void SNativeWebView::Tick(const FGeometry& Geometry, double, float)
 {
 	if (!bVisible) return;
+	if (NativeWebInputRouting::IsConsoleActive(Player.Get()))
+	{
+		if (bPointerPressed || HasKeyboardFocus()) ReleaseInput(true);
+		return;
+	}
 	const FVector2D LocalSize = Geometry.GetLocalSize();
 	if (LocalSize.X <= 0 || LocalSize.Y <= 0) return;
 	const float Scale = Geometry.GetAccumulatedLayoutTransform().GetScale();
@@ -113,7 +122,7 @@ void SNativeWebView::Forward(const FAffineUiInput& Input) const
 
 bool SNativeWebView::ForwardPointer(EAffineUiInputKind Kind, const FGeometry& Geometry, const FPointerEvent& Event)
 {
-	if (!bVisible) return false;
+	if (!bVisible || NativeWebInputRouting::IsConsoleActive(Player.Get())) return false;
 	const FVector2D Size = Geometry.GetLocalSize();
 	if (Size.X <= 0 || Size.Y <= 0) return false;
 	const FVector2D Local = Geometry.AbsoluteToLocal(Event.GetScreenSpacePosition());
@@ -163,7 +172,8 @@ FReply SNativeWebView::OnMouseWheel(const FGeometry& Geometry, const FPointerEve
 
 void SNativeWebView::OnMouseLeave(const FPointerEvent&)
 {
-	if (!bPointerPressed) Forward({EAffineUiInputKind::MouseMove, FVector2D(-1.0, -1.0)});
+	if (!bPointerPressed && !NativeWebInputRouting::IsConsoleActive(Player.Get()))
+		Forward({EAffineUiInputKind::MouseMove, FVector2D(-1.0, -1.0)});
 }
 
 void SNativeWebView::OnMouseCaptureLost(const FCaptureLostEvent&)
@@ -188,9 +198,20 @@ void SNativeWebView::OnFocusLost(const FFocusEvent&)
 	Forward({EAffineUiInputKind::FocusLost});
 }
 
+FReply SNativeWebView::OnKeyChar(const FGeometry&, const FCharacterEvent& Event)
+{
+	if (!bVisible || !NativeWebInputRouting::IsConsoleActive(Player.Get())) return FReply::Unhandled();
+	return NativeWebInputRouting::RouteCharacterToConsole(Player.Get(), Event)
+		       ? FReply::Handled()
+		       : FReply::Unhandled();
+}
+
 FReply SNativeWebView::ForwardKey(EAffineUiInputKind Kind, const FKeyEvent& Event)
 {
 	if (!bVisible) return FReply::Unhandled();
+	if (NativeWebInputRouting::IsConsoleActive(Player.Get()))
+		return NativeWebInputRouting::RouteKeyToConsole(Player.Get(), Event,
+			Kind == EAffineUiInputKind::KeyDown) ? FReply::Handled() : FReply::Unhandled();
 	FAffineUiInput Input{Kind};
 	if (Event.GetKey() == EKeys::Tab) Input.Key = EAffineUiInputKey::Tab;
 	else if (Event.GetKey() == EKeys::Enter) Input.Key = EAffineUiInputKey::Enter;

@@ -14,7 +14,7 @@
 
 /**
  * @brief Input event forwarded to the embedded NativeWeb surface.
- * @details Coordinates use view pixel space; fields unrelated to Type are ignored. This is a deliberately small input contract, not a full Unreal key mapping.
+ * @details NormalizedPosition is in normalized view coordinates (0..1 across the displayed view); fields unrelated to Type are ignored. This is a deliberately small input contract, not a full Unreal key mapping.
  * @ingroup NativeWeb
  */
 USTRUCT(BlueprintType)

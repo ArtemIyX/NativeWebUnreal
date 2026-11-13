@@ -84,9 +84,11 @@ void UMyHudOwner::StartNativeWeb(ULocalPlayer* LocalPlayer)
         return;
     }
 
+    FNativeWebSurfaceConfig Surface;
+    FNativeWebPresentationConfig Presentation;
     FNativeWebError Error;
     HudView = NativeWeb->CreatePackagedView(
-        FName(TEXT("Hud")), TEXT("NativeWeb/Hud"), Error);
+        FName(TEXT("Hud")), TEXT("NativeWeb/Hud"), Surface, Presentation, Error);
     if (!HudView)
     {
         UE_LOG(LogNativeWebSubsystem, Error, TEXT("View creation failed (%s): %s"),
@@ -106,51 +108,131 @@ unregisters it.
 
 ## Inline view workflow
 
-Use `CreateView` when the document and stylesheet are already available as
-strings or when the view needs custom options:
+Use `CreateInlineView` when the document and stylesheet are already available
+as strings:
 
 ```cpp
-FNativeWebViewOptions Options;
-Options.PixelSize = FIntPoint(1280, 720);
-Options.DpiScale = 1.0f;
-Options.Html = TEXT("<html><body><main id=\"app\"></main></body></html>");
-Options.Css = TEXT("html, body { margin: 0; width: 100%; height: 100%; }");
-Options.bCreateViewportOverlay = true;
-Options.ViewportZOrder = 10;
+FNativeWebSurfaceConfig Surface;
+Surface.PixelSize = FIntPoint(1280, 720);
+
+FNativeWebPresentationConfig Presentation;
+Presentation.ViewportZOrder = 10;
 
 FNativeWebError Error;
-UNativeWebView* View = NativeWeb->CreateView(FName(TEXT("Menu")), Options, Error);
+UNativeWebView* View = NativeWeb->CreateInlineView(
+    FName(TEXT("Menu")),
+    TEXT("<html><body><main id=\"app\"></main></body></html>"),
+    TEXT("html, body { margin: 0; width: 100%; height: 100%; }"),
+    Surface, Presentation, Error);
 ```
 
-`FNativeWebViewOptions` also contains `ClearColor` and an optional
-`PackagedAssetRoot`. The latter is a project-Content-relative directory used
-for packaged document assets and its `fonts` subdirectory. To load a document
-after creation, call `LoadPackagedDocument` with normalized paths relative to
-that root. To execute a separate script, call `EvaluatePackagedScript`.
+Inline startup JavaScript remains explicit: call `EvaluateScript` after
+creation. Packaged views use the fixed `ui.css` and `ui.js` filenames and may
+place fonts in a `fonts` subdirectory; callers pass only the folder relative
+to the project's `Content` directory.
 
 ## View lifecycle and presentation
 
-- `CreatePackagedView` and `CreateView` create the view and register it with
+- `CreatePackagedView` and `CreateInlineView` create the view and register it with
   the owning local-player subsystem. Creation fails for an empty/duplicate
   name, invalid content path/options, unsupported renderer, or occupied
   single-surface capacity.
-- `Show` makes the view visible and attaches it to the local-player viewport
-  when needed. `Hide` hides it while keeping its runtime alive.
-- `AttachToPlayerViewport` and `DetachFromPlayerViewport` manage the Slate
-  overlay independently of view creation. The view's Slate widget forwards
-  pointer, wheel, keyboard, and focus events while attached.
+- The default `PresentationMode` is `GpuViewport`. It samples the existing
+  opaque output texture in a UE 5.7 scene-view extension after scene rendering
+  and upscaling. Slate/UMG is composed later and can cover the GPU view; GPU
+  presentation has no arbitrary Slate z-order. This ordering is source-verified
+  against the UE 5.7 `PostRenderView_RenderThread` call site and still needs
+  standalone/PIE validation on the target project.
+- `Slate` explicitly selects the Slate widget and honors `ViewportZOrder`.
+  `None` attaches no built-in drawing or input handler; use `GetTexture` and
+  `ForwardInput` from a custom host. Views attach their selected mode when
+  created; `ViewportZOrder` applies only to Slate.
+- `Show` attaches the requested presenter if detached. `Hide` releases focus,
+  capture, and pressed pointer state without destroying the surface. The GPU
+  switch is pending until a scene-view callback confirms a valid SDR scene
+  target and output texture. `GetRequestedPresentationMode`,
+  `GetPendingPresentationMode`, `GetActivePresentationMode`,
+  `IsPresentationPending`, `IsPresentationFallbackActive`, and
+  `GetPresentationFailureReason` distinguish these states.
+- `SetPresentationMode` reports synchronous acceptance in its return value and
+  `OutError`; `OnPresentationChanged()` reports asynchronous completion or
+  failure on the game thread. GPU initialization failure may activate Slate
+  when fallback is enabled. Active GPU render-target/HDR failure initiates a
+  controlled fallback on the next view tick. A shader compilation failure that
+  prevents module startup cannot be caught by runtime fallback.
+- Legacy `AttachToPlayerViewport` explicitly selects Slate and attaches it;
+  legacy `DetachFromPlayerViewport` selects Slate and detaches. Use
+  `AttachPresentation` and `DetachPresentation` for mode-neutral operations.
+  Only one built-in presenter and input route is active at a time.
+- The GPU input preprocessor is scoped to the owning game viewport window and
+  view rectangle. It consumes left mouse, wheel, and Tab/Enter/Space only while
+  the NativeWeb surface is the top Slate hit target; other Slate/UMG hit targets
+  keep their input. A left press captures the native game window so its release
+  can be delivered outside the view. Input positions are normalized within the
+  view rectangle; text entry, IME, and arbitrary keyboard input are unsupported.
 - `ForwardInput` lets a custom host forward an `FNativeWebInputEvent` directly.
   Pointer positions use normalized coordinates; the supported key enum is
   limited to Tab, Enter, and Space.
 - `GetTexture` returns the view-owned `UTextureRenderTarget2D` for custom
   presentation. Do not destroy it or access its RHI resource from arbitrary
   threads.
-- `Close` is idempotent. It stops message delivery, detaches the widget,
+- `Close` is idempotent. It stops message delivery, detaches the active presenter,
   releases view-owned focus/capture, invalidates callbacks, and tears down the
   runtime. `DestroyView` additionally removes the view from the subsystem map.
 
-The Slate view manages its own focus and pointer capture. It does not replace
-or silently modify the `PlayerController` input mode or input mappings.
+The GPU path currently supports Win64, D3D11, one live AffineUI surface, and
+non-stereo viewports whose scene target is PF_B8G8R8A8, PF_R8G8B8A8, or
+PF_A2B10G10R10. The supported output device is opaque `SDR_sRGB` with the
+sRGB-D65 gamut. AffineUI creates a single-sample BGRA8 sRGB texture: its
+shader-resource view decodes RGB to linear, and the GPU presenter explicitly
+encodes RGB back to sRGB for UE's non-sRGB scene attachment. Alpha is forced to
+1.0; the surface rejects non-opaque clear colors, and transparent presentation
+is unsupported. The scene target must be a single-sample 2D renderable/shader
+resource, and the view rectangle must fit within it.
+
+HDR, Rec.709, explicit-gamma and other output-device configurations, invalid
+or unsupported target attachments, transparent output, direct AffineUI
+rendering to the viewport, and arbitrary Slate interleaving use the controlled
+Slate fallback. The 10-bit target is therefore supported only as SDR when the
+output-device contract above is true; changing to an 8-bit target alone does
+not change color encoding. GPU content belongs to the scene viewport and
+Slate/UMG renders above it; GPU presentation has no arbitrary Slate z-order.
+No performance improvement is claimed.
+
+## Local GPU presenter validation (UE 5.7)
+
+Do not use a mock render target as evidence for draw ordering or GPU lifetime.
+Run these checks locally in Development with D3D11:
+
+1. Open the project in PIE and standalone. Confirm a default inline view and a
+   default packaged view report requested `GpuViewport`, then active
+   `GpuViewport`, with no pending switch or fallback. Confirm scene content is
+   behind NativeWeb and Slate/UMG widgets are above it.
+2. Set `NativeWeb.Presentation.ForceGpuInitFailure 1` in the Development
+   console, create a new default view, and confirm active `Slate`, fallback
+   true, a nonempty reason, and working JS messages. Set it back to `0` before
+   creating the next view. Also try `SetPresentationMode(GpuViewport, false)`
+   to verify failure leaves the existing presenter usable.
+3. Switch the same live view repeatedly between GPU and Slate, then `None` and
+   back. Confirm one visible presenter/input route at a time and preserve the
+   same JS variables, listeners, messages, and texture content. Exercise
+   Show/Hide, neutral attach/detach, legacy Slate attach/detach, and close twice.
+4. Compare text, colors, scaling, and opaque output in both modes. Test pointer
+   hover, left press/drag beyond the view/release, wheel, Tab, Enter, Space,
+   focus loss, application deactivation, and an overlapping UMG button. Confirm
+   UMG receives input when it is visually in front.
+5. Resize the game window and viewport, change DPI scaling, and repeat in PIE
+   and standalone. Check split-screen and stereo behavior explicitly; stereo
+   is rejected and should use the configured fallback.
+6. Package a Development build with the plugin enabled and verify
+   `/Plugin/NativeWeb/Private/NativeWebViewport.usf` is available at startup.
+   Repeat create/switch/destroy and shutdown cycles and inspect render/RHI logs
+   for stale textures, device warnings, or use-after-free.
+
+The focused automation group is `Automation RunTests NativeWeb.Presentation`.
+The GPU draw order, cooked shader loading, input capture, and RHI retirement
+still require the live checks above; the coordinate unit test does not prove
+those integration properties.
 
 ## Two-way messaging
 

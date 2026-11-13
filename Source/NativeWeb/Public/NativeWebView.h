@@ -15,7 +15,8 @@
 #include "Data/Structs/NativeWebError.h"
 #include "Data/Structs/NativeWebInputEvent.h"
 #include "Data/Structs/NativeWebMessage.h"
-#include "Data/Structs/NativeWebViewOptions.h"
+#include "Data/Structs/NativeWebPresentationConfig.h"
+#include "Data/Structs/NativeWebSurfaceConfig.h"
 #include "NativeWebDelegates.h"
 #include "NativeWebView.generated.h"
 
@@ -51,10 +52,10 @@ public:
 
 	virtual void BeginDestroy() override;
 	/**
-	 * @brief Shows the view and attaches its Slate widget to the owning player viewport when needed.
-	 * @return True if the view is open and can be shown; false if it is closed or attachment fails.
+	 * @brief Shows the view and attaches its requested built-in presenter when needed.
+	 * @return True if the view is open; GPU initialization may remain pending or use configured Slate fallback.
 	 * @details Safe to call repeatedly. Visibility does not change whether the view owns a live AffineUI surface.
-	 * @note Game-thread only. Call @ref AttachToPlayerViewport explicitly when custom z-order is required.
+	 * @note Game-thread only. Use @ref SetPresentationMode to choose GPU, Slate, or no built-in presenter.
 	 * @par Example
 	 * Show the view after creation.
 	 * @code{.cpp}
@@ -65,7 +66,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category="NativeWeb")
 	bool Show();
 	/**
-	 * @brief Hides the viewport widget and releases any pointer capture owned by this view.
+	 * @brief Hides the active presenter and releases any focus, capture, or pressed pointer state.
 	 * @details The view and render surface remain alive; call @ref Close to release runtime resources. PlayerController input settings are not modified.
 	 * @note Game-thread only. The same view may be shown again later.
 	 * @par Example
@@ -78,9 +79,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="NativeWeb")
 	void Hide();
 	/**
-	 * @brief Reports whether this view is currently visible in its Slate attachment.
-	 * @return True if shown; false if hidden or not attached.
-	 * @note Game-thread only. This does not report whether the underlying AffineUI surface is initialized.
+	 * @brief Reports the view's requested visible state independently of its presenter type.
+	 * @return True if shown; false if hidden.
+	 * @note Game-thread only. This does not report whether a presenter is active or the AffineUI surface is initialized.
 	 * @par Example
 	 * Invocation example; substitute arguments that satisfy the function contract.
 	 * @code{.cpp}
@@ -91,8 +92,55 @@ public:
 	UFUNCTION(BlueprintPure, Category="NativeWeb")
 	bool IsVisible() const { return bVisible; }
 
+	/** @brief Returns the requested presentation mode, which may still be pending or unavailable. */
+	UFUNCTION(BlueprintPure, Category="NativeWeb|Presentation")
+	ENativeWebPresentationMode GetRequestedPresentationMode() const { return RequestedPresentationMode; }
+
+	/** @brief Returns the active presenter; None means no built-in drawing or input route is attached. */
+	UFUNCTION(BlueprintPure, Category="NativeWeb|Presentation")
+	ENativeWebPresentationMode GetActivePresentationMode() const { return ActivePresentationMode; }
+
+	/** @brief Returns the candidate mode while a switch is pending, otherwise None. */
+	UFUNCTION(BlueprintPure, Category="NativeWeb|Presentation")
+	ENativeWebPresentationMode GetPendingPresentationMode() const { return PendingPresentationMode; }
+
+	/** @brief Returns whether a presenter switch is waiting for render-thread initialization. */
+	UFUNCTION(BlueprintPure, Category="NativeWeb|Presentation")
+	bool IsPresentationPending() const { return bPresentationPending; }
+
+	/** @brief Returns whether the active mode is a fallback from the requested GPU mode. */
+	UFUNCTION(BlueprintPure, Category="NativeWeb|Presentation")
+	bool IsPresentationFallbackActive() const { return bPresentationFallbackActive; }
+
+	/** @brief Returns the last GPU/Slate presenter failure that caused a fallback or rejected a switch. */
+	UFUNCTION(BlueprintPure, Category="NativeWeb|Presentation")
+	FString GetPresentationFailureReason() const { return PresentationFailureReason; }
+
 	/**
-	 * @brief Resizes the render surface and attached viewport widget.
+	 * @brief Requests a built-in presenter switch while retaining this view and its AffineUI surface.
+	 * @param Mode Requested presenter; GPU switches complete asynchronously after a render callback validates resources.
+	 * @param bAllowSlateFallback Whether GPU initialization failure may activate Slate.
+	 * @param OutError Receives a synchronous rejection; asynchronous completion is reported by OnPresentationChanged.
+	 * @return True if the request was accepted, already active, or is pending.
+	 * @details Candidate GPU resources are initialized before the active presenter is detached. The API never creates another surface.
+	 * @note Game-thread only. Exactly one built-in presenter is active after a successful transition.
+	 */
+	UFUNCTION(BlueprintCallable, Category="NativeWeb|Presentation")
+	bool SetPresentationMode(ENativeWebPresentationMode Mode, bool bAllowSlateFallback, FNativeWebError& OutError);
+
+	/** @brief Attaches the currently requested presenter without changing its requested mode. */
+	UFUNCTION(BlueprintCallable, Category="NativeWeb|Presentation")
+	bool AttachPresentation();
+
+	/** @brief Detaches the active presenter and input route while keeping the view and surface alive. */
+	UFUNCTION(BlueprintCallable, Category="NativeWeb|Presentation")
+	void DetachPresentation();
+
+	/** @brief Returns the game-thread notification for requested, pending, active, fallback, and failure state changes. */
+	FNativeWebPresentationChanged& OnPresentationChanged() { return PresentationChanged; }
+
+	/**
+	 * @brief Resizes the render surface; an attached presenter may also update it from viewport geometry.
 	 * @param PixelSize Requested surface dimensions in pixels; both axes must be positive.
 	 * @param DpiScale Slate presentation scale for the view; defaults to 1.
 	 * @return True if the resize request is valid and accepted; otherwise false.
@@ -108,11 +156,11 @@ public:
 	bool Resize(FIntPoint PixelSize, float DpiScale = 1.0f);
 
 	/**
-	 * @brief Adds the reusable Slate view widget to its owning local player's viewport.
+	 * @brief Selects and attaches the legacy Slate presenter to the owning local player's viewport.
 	 * @param ZOrder Slate viewport z-order; higher values are drawn above lower values.
 	 * @return True if attached or already attached; false if the owner, viewport, or widget is unavailable.
-	 * @details Repeated calls retain one attachment rather than adding duplicate widgets.
-	 * @note Game-thread only. Use @ref DetachFromPlayerViewport to remove the widget without closing the view.
+	 * @details Repeated calls retain one attachment rather than adding duplicate widgets. Calling this explicitly changes the requested mode to Slate.
+	 * @note Game-thread only. Use @ref AttachPresentation for a mode-neutral attach.
 	 * @par Example
 	 * Invocation example; substitute arguments that satisfy the function contract.
 	 * @code{.cpp}
@@ -124,8 +172,9 @@ public:
 	bool AttachToPlayerViewport(int32 ZOrder = 0);
 
 	/**
-	 * @brief Removes the Slate widget from the viewport and releases view-owned focus and pointer capture.
-	 * @details The render surface and view remain alive. The widget can be attached again with @ref AttachToPlayerViewport.
+	 * @brief Selects Slate as the requested mode and detaches the active built-in presenter.
+	 * @details The render surface and view remain alive. The view can be reattached with @ref AttachToPlayerViewport.
+	 * @note Use @ref DetachPresentation to detach without changing the requested mode.
 	 * @note Game-thread only; this does not modify PlayerController input mode or mapping settings.
 	 * @par Example
 	 * Invocation example; substitute arguments that satisfy the function contract.
@@ -153,9 +202,9 @@ public:
 
 	/**
 	 * @brief Forwards one pointer, keyboard, wheel, or focus event to the embedded surface.
-	 * @param Event Event type and coordinates/key data; pointer coordinates use the view's pixel space.
+	 * @param Event Event type and coordinates/key data; pointer coordinates use normalized view coordinates.
 	 * @return True if the view is open and accepted the event; false if closed or unsupported.
-	 * @details Input may also be forwarded by the attached Slate widget. Custom hosts can use this method directly.
+	 * @details Input may also be forwarded by the active presenter. Custom hosts can use this method directly.
 	 * @note Game-thread only. The API does not change PlayerController input mode or capture settings.
 	 * @par Example
 	 * Invocation example; substitute arguments that satisfy the function contract.
@@ -325,7 +374,7 @@ public:
 
 	/**
 	 * @brief Idempotently closes the view and releases its runtime and Slate resources.
-	 * @details Stops message delivery, detaches the viewport widget, releases view-owned focus/capture, invalidates callbacks, and tears down QuickJS and AffineUI state on their owning lanes.
+	 * @details Stops message delivery, detaches the active presenter, releases view-owned focus/capture, invalidates callbacks, and tears down QuickJS and AffineUI state on their owning lanes.
 	 * @note Game-thread only. Do not use the view for new operations after close; repeated calls are safe.
 	 * @par Example
 	 * Invocation example; substitute arguments that satisfy the function contract.
@@ -357,7 +406,11 @@ private:
 	/**
 	 * @brief Initializes the owning subsystem or runtime object.
 	* @param InName Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
-	* @param Options Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
+	 * @param Html HTML source for the document.
+	 * @param Css CSS source paired with the document.
+	 * @param PackagedAssetRoot Optional normalized project-Content-relative asset root.
+	 * @param SurfaceConfig Initial AffineUI surface configuration.
+	 * @param PresentationConfig Initial presenter configuration.
 	* @param Player Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
 	 * @param OutError Output value populated by this operation when applicable.
 	 * @return True when the operation succeeds or accepts the request; false when it fails or rejects it.
@@ -365,11 +418,18 @@ private:
 	 * @par Example
 	 * Invocation example; substitute arguments that satisfy the function contract.
 	 * @code{.cpp}
-	 * Initialize(InName, Options, Player, OutError);
+	 * Initialize(InName, Html, Css, PackagedAssetRoot, SurfaceConfig, PresentationConfig, Player, OutError);
 	 * @endcode
 	 */
-	bool Initialize(FName InName, const FNativeWebViewOptions& Options, ULocalPlayer* Player,
+	bool Initialize(FName InName, const FString& Html, const FString& Css, const FString& InPackagedAssetRoot,
+	                const FNativeWebSurfaceConfig& SurfaceConfig,
+	                const FNativeWebPresentationConfig& PresentationConfig, ULocalPlayer* Player,
 	                FNativeWebError& OutError);
+	bool StartRequestedPresenter(FNativeWebError& OutError);
+	bool StartSlatePresenter(FNativeWebError& OutError);
+	void RemoveSlatePresenter();
+	void CompletePendingPresentation();
+	void SetPresentationFailure(const FString& Reason, bool bTryFallback);
 	/**
 	 * @brief Advances bounded work owned by this object.
 	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
@@ -429,13 +489,24 @@ private:
 #endif
 	TSharedPtr<class FAffineUiSurface, ESPMode::ThreadSafe> Surface;
 	TSharedPtr<SNativeWebView> Attachment;
+	TUniquePtr<class FNativeWebGpuPresenter> GpuPresenter;
 	TWeakObjectPtr<ULocalPlayer> OwningPlayer;
 	FNativeWebMessageReceived MessageReceived;
 	FNativeWebViewError Error;
+	FNativeWebPresentationChanged PresentationChanged;
+	ENativeWebPresentationMode RequestedPresentationMode = ENativeWebPresentationMode::GpuViewport;
+	ENativeWebPresentationMode ActivePresentationMode = ENativeWebPresentationMode::None;
+	ENativeWebPresentationMode PendingPresentationMode = ENativeWebPresentationMode::None;
+	FString PresentationFailureReason;
+	double GpuPendingStartedAtSeconds = 0.0;
+	int32 SlateZOrder = 0;
 	FCriticalSection ProducerMutex;
 	TArray<FNativeWebMessage> ProducerMessages;
 	int64 ProducerBytes = 0;
 	bool bVisible = false;
+	bool bPresentationPending = false;
+	bool bPresentationFallbackActive = false;
+	bool bAllowPresentationFallback = true;
 	bool bClosed = false;
 	bool bInitialized = false;
 	uint64 Generation = 1;

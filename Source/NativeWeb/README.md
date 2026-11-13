@@ -115,7 +115,6 @@ Options.PixelSize = FIntPoint(1280, 720);
 Options.DpiScale = 1.0f;
 Options.Html = TEXT("<html><body><main id=\"app\"></main></body></html>");
 Options.Css = TEXT("html, body { margin: 0; width: 100%; height: 100%; }");
-Options.bCreateViewportOverlay = true;
 Options.ViewportZOrder = 10;
 Options.PresentationMode = ENativeWebPresentationMode::GpuViewport;
 Options.bFallbackToSlate = true;
@@ -142,12 +141,10 @@ that root. To execute a separate script, call `EvaluatePackagedScript`.
   presentation has no arbitrary Slate z-order. This ordering is source-verified
   against the UE 5.7 `PostRenderView_RenderThread` call site and still needs
   standalone/PIE validation on the target project.
-- `Slate` explicitly selects the legacy widget and honors `ViewportZOrder`.
+- `Slate` explicitly selects the Slate widget and honors `ViewportZOrder`.
   `None` attaches no built-in drawing or input handler; use `GetTexture` and
-  `ForwardInput` from a custom host. `bCreateViewportOverlay=false` suppresses
-  automatic attachment but leaves the requested mode unchanged. The old
-  `bCreateViewportOverlay` and `ViewportZOrder` reflected fields remain for
-  compatibility; the latter is Slate-only.
+  `ForwardInput` from a custom host. Views attach their selected mode when
+  created; `ViewportZOrder` applies only to Slate.
 - `Show` attaches the requested presenter if detached. `Hide` releases focus,
   capture, and pressed pointer state without destroying the surface. The GPU
   switch is pending until a scene-view callback confirms a valid SDR scene

@@ -33,7 +33,7 @@ struct NATIVEWEB_API FNativeWebViewOptions
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NativeWeb")
 	FColor ClearColor = FColor(0, 0, 0, 255);
 
-	/** @brief Preferred built-in presenter when automatic viewport attachment is enabled. */
+	/** @brief Built-in presenter selected and attached when the view is created. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NativeWeb")
 	ENativeWebPresentationMode PresentationMode = ENativeWebPresentationMode::GpuViewport;
 
@@ -41,11 +41,7 @@ struct NATIVEWEB_API FNativeWebViewOptions
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NativeWeb")
 	bool bFallbackToSlate = true;
 
-	/** @brief Legacy compatibility switch: false suppresses automatic attachment without changing PresentationMode. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NativeWeb")
-	bool bCreateViewportOverlay = true;
-
-	/** @brief Legacy Slate-only z-order used when the initial presenter is Slate. */
+	/** @brief Slate-only z-order used when the selected presenter is Slate. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NativeWeb")
 	int32 ViewportZOrder = 0;
 

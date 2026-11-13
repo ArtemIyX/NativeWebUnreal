@@ -65,7 +65,6 @@ UNativeWebView* UNativeWebLocalPlayerSubsystem::CreatePackagedView(FName Name, c
                                                                    FNativeWebError& OutError)
 {
 	FNativeWebViewOptions Options;
-	Options.bCreateViewportOverlay = true;
 	return CreatePackagedViewWithOptions(Name, ContentRelativeDirectory, Options, OutError);
 }
 
@@ -150,8 +149,8 @@ UNativeWebView* UNativeWebLocalPlayerSubsystem::CreateView(FName Name, const FNa
 	check(IsInGameThread());
 	OutError = {};
 	UE_LOG(LogNativeWebSubsystem, Verbose,
-	       TEXT("Creating NativeWeb view '%s' (size=%dx%d, overlay=%s)."), *Name.ToString(),
-	       Options.PixelSize.X, Options.PixelSize.Y, Options.bCreateViewportOverlay ? TEXT("true") : TEXT("false"));
+	       TEXT("Creating NativeWeb view '%s' (size=%dx%d, presentation=%s)."), *Name.ToString(),
+	       Options.PixelSize.X, Options.PixelSize.Y, *UEnum::GetValueAsString(Options.PresentationMode));
 	if (Name.IsNone())
 	{
 		OutError.Code = TEXT("InvalidName");
@@ -176,10 +175,7 @@ UNativeWebView* UNativeWebLocalPlayerSubsystem::CreateView(FName Name, const FNa
 		return nullptr;
 	}
 	Views.Add(Name, View);
-	if (Options.bCreateViewportOverlay)
-	{
-		View->Show();
-	}
+	View->Show();
 	UE_LOG(LogNativeWebSubsystem, Display, TEXT("NativeWeb view '%s' created."), *Name.ToString());
 	return View;
 }

@@ -166,8 +166,9 @@ public:
 		if (View.Family->RenderTarget->GetSceneHDREnabled())
 		{
 			FScopeLock Lock(&State->Mutex);
-			if (State->Failure.IsEmpty()) State->Failure =
-				TEXT("The GPU presenter currently supports SDR output only.");
+			if (State->Failure.IsEmpty())
+				State->Failure =
+					TEXT("The GPU presenter currently supports SDR output only.");
 			return;
 		}
 		const FTextureRHIRef SceneTexture = View.Family->RenderTarget->GetRenderTargetTexture();

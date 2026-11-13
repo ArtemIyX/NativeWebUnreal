@@ -64,6 +64,15 @@ void UNativeWebLocalPlayerSubsystem::Deinitialize()
 UNativeWebView* UNativeWebLocalPlayerSubsystem::CreatePackagedView(FName Name, const FString& ContentRelativeDirectory,
                                                                    FNativeWebError& OutError)
 {
+	FNativeWebViewOptions Options;
+	Options.bCreateViewportOverlay = true;
+	return CreatePackagedViewWithOptions(Name, ContentRelativeDirectory, Options, OutError);
+}
+
+UNativeWebView* UNativeWebLocalPlayerSubsystem::CreatePackagedViewWithOptions(
+	FName Name, const FString& ContentRelativeDirectory, const FNativeWebViewOptions& ViewOptions,
+	FNativeWebError& OutError)
+{
 	check(IsInGameThread());
 	OutError = {};
 	UE_LOG(LogNativeWebSubsystem, Log,
@@ -105,11 +114,10 @@ UNativeWebView* UNativeWebLocalPlayerSubsystem::CreatePackagedView(FName Name, c
 		return nullptr;
 	}
 
-	FNativeWebViewOptions Options;
+	FNativeWebViewOptions Options = ViewOptions;
 	Options.Html = TEXT("<html><body><div id=\"app\"></div></body></html>");
 	Options.Css = MoveTemp(Css);
 	Options.PackagedAssetRoot = AssetRoot;
-	Options.bCreateViewportOverlay = true;
 
 	UNativeWebView* View = CreateView(Name, Options, OutError);
 	if (!View)
@@ -170,17 +178,6 @@ UNativeWebView* UNativeWebLocalPlayerSubsystem::CreateView(FName Name, const FNa
 	Views.Add(Name, View);
 	if (Options.bCreateViewportOverlay)
 	{
-		if (!View->AttachToPlayerViewport(Options.ViewportZOrder))
-		{
-			View->Close();
-			Views.Remove(Name);
-			OutError.Code = TEXT("ViewportUnavailable");
-			OutError.Message = TEXT("Could not attach the NativeWeb view to the local player viewport.");
-			OutError.ViewName = Name;
-			UE_LOG(LogNativeWebSubsystem, Error, TEXT("View '%s' could not attach to its local player viewport."),
-			       *Name.ToString());
-			return nullptr;
-		}
 		View->Show();
 	}
 	UE_LOG(LogNativeWebSubsystem, Display, TEXT("NativeWeb view '%s' created."), *Name.ToString());

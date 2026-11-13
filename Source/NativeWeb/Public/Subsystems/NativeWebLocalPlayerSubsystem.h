@@ -74,6 +74,20 @@ public:
 		FNativeWebError& OutError);
 
 	/**
+	 * @brief Creates a packaged view using explicit size, presentation, fallback, and attachment options.
+	 * @param Name Unique view name in this local-player subsystem.
+	 * @param ContentRelativeDirectory Project-Content-relative directory containing ui.css and ui.js.
+	 * @param Options Presentation mode, fallback policy, size, clear color, and attachment settings; document contents are loaded from the package.
+	 * @param OutError Receives a structured failure reason.
+	 * @return The initialized view, or nullptr when view or content initialization fails.
+	 * @details The legacy overload selects GPU viewport presentation by default and automatically attaches the requested mode.
+	 * @note Game-thread only. GPU presentation may still be pending when this function returns.
+	 */
+	UFUNCTION(BlueprintCallable, Category="NativeWeb")
+	UNativeWebView* CreatePackagedViewWithOptions(FName Name, const FString& ContentRelativeDirectory,
+	                                              const FNativeWebViewOptions& Options, FNativeWebError& OutError);
+
+	/**
 	 * @brief Creates and registers a view from inline document and runtime options.
 	 * @param Name Unique view name within this local-player subsystem; duplicate live names are rejected.
 	 * @param Options Pixel size, DPI, clear color, viewport behavior, inline HTML/CSS, and optional packaged asset root.

@@ -1,0 +1,22 @@
+struct FVertexOutput
+{
+	float4 Position : SV_Position;
+};
+
+FVertexOutput MainVS(uint VertexId : SV_VertexID)
+{
+	FVertexOutput Output;
+	float2 Position = float2((VertexId << 1) & 2, VertexId & 2);
+	Output.Position = float4(Position * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+	return Output;
+}
+
+Texture2D WebTexture;
+SamplerState WebSampler;
+float4 ViewRect;
+
+float4 MainPS(FVertexOutput Input) : SV_Target0
+{
+	float2 ViewUv = (Input.Position.xy - ViewRect.xy) / ViewRect.zw;
+	return WebTexture.Sample(WebSampler, ViewUv);
+}

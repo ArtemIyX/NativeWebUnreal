@@ -8,7 +8,7 @@ linked into cooked Shipping targets.
 
 | Automation path | Coverage |
 | --- | --- |
-| `NativeWeb.*` | AffineUI surface lifecycle, QuickJS bridge lifecycle, byte/string messaging, limits, Vue bundle, and view close behavior |
+| `NativeWeb.*` | AffineUI surface lifecycle, QuickJS bridge lifecycle, byte/string messaging, limits, Vue bundle, view close behavior, presenter state defaults, and GPU input coordinate conversion |
 | `NativeWebDispatch.*` | Route-key identity/lifetime, decoder registry, typed handler routing, and metadata |
 | `NativeWebWebSocket.*` | Game-thread event ordering, server generations, stop/restart behavior, and client/message routing |
 
@@ -27,6 +27,7 @@ example:
 
 ```text
 Automation RunTests NativeWeb
+Automation RunTests NativeWeb.Presentation
 Automation RunTests NativeWebDispatch
 Automation RunTests NativeWebWebSocket
 ```

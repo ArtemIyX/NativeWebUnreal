@@ -8,6 +8,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Data/Enums/NativeWebPresentationMode.h"
 #include "NativeWebViewOptions.generated.h"
 
 /**
@@ -32,11 +33,19 @@ struct NATIVEWEB_API FNativeWebViewOptions
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NativeWeb")
 	FColor ClearColor = FColor(0, 0, 0, 255);
 
-	/** @brief Whether creation should attach the view widget to the local-player viewport. */
+	/** @brief Preferred built-in presenter when automatic viewport attachment is enabled. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NativeWeb")
+	ENativeWebPresentationMode PresentationMode = ENativeWebPresentationMode::GpuViewport;
+
+	/** @brief Whether a GPU presenter initialization failure may activate the Slate fallback. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NativeWeb")
+	bool bFallbackToSlate = true;
+
+	/** @brief Legacy compatibility switch: false suppresses automatic attachment without changing PresentationMode. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NativeWeb")
 	bool bCreateViewportOverlay = true;
 
-	/** @brief Z-order used when the initial viewport overlay is attached. */
+	/** @brief Legacy Slate-only z-order used when the initial presenter is Slate. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NativeWeb")
 	int32 ViewportZOrder = 0;
 

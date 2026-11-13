@@ -1,6 +1,7 @@
 
 
 #include "NativeWebView.h"
+#include "NativeWebGpuPresenter.h"
 
 #include "AffineUiScriptInstance.h"
 #include "AffineUiSurface.h"
@@ -60,6 +61,9 @@ bool UNativeWebView::Initialize(FName InName, const FNativeWebViewOptions& Optio
 	UE_LOG(LogNativeWebView, Log, TEXT("Initializing view '%s' (size=%dx%d, dpi=%.2f)."),
 	       *InName.ToString(), Options.PixelSize.X, Options.PixelSize.Y, Options.DpiScale);
 	ViewName = InName;
+	RequestedPresentationMode = Options.PresentationMode;
+	bAllowPresentationFallback = Options.bFallbackToSlate;
+	SlateZOrder = Options.ViewportZOrder;
 	OwningPlayer = Player;
 	PackagedAssetRoot = Options.PackagedAssetRoot;
 #if !PLATFORM_WINDOWS
@@ -148,6 +152,7 @@ bool UNativeWebView::Initialize(FName InName, const FNativeWebViewOptions& Optio
 void UNativeWebView::SetOutputTexture(UTextureRenderTarget2D* Texture)
 {
 	if (Attachment) Attachment->SetTexture(Texture);
+	if (GpuPresenter) GpuPresenter->SetTexture(Texture);
 }
 
 bool UNativeWebView::Show()
@@ -159,9 +164,22 @@ bool UNativeWebView::Show()
 		       *ViewName.ToString());
 		return false;
 	}
-	if (!Attachment && !AttachToPlayerViewport(0)) return false;
 	bVisible = true;
+	if (bPresentationPending && PendingPresentationMode == RequestedPresentationMode)
+	{
+		if (Attachment && ActivePresentationMode == ENativeWebPresentationMode::Slate) Attachment->SetVisible(true);
+		if (GpuPresenter && ActivePresentationMode == ENativeWebPresentationMode::GpuViewport) GpuPresenter->SetVisible(true);
+		UE_LOG(LogNativeWebViewport, VeryVerbose, TEXT("View '%s' show retained its pending presenter."), *ViewName.ToString());
+		return true;
+	}
+	if (ActivePresentationMode == ENativeWebPresentationMode::None ||
+	    (ActivePresentationMode != RequestedPresentationMode && !bPresentationFallbackActive))
+	{
+		FNativeWebError PresenterError;
+		StartRequestedPresenter(PresenterError);
+	}
 	if (Attachment) Attachment->SetVisible(true);
+	if (GpuPresenter && ActivePresentationMode == ENativeWebPresentationMode::GpuViewport) GpuPresenter->SetVisible(true);
 	UE_LOG(LogNativeWebViewport, Log, TEXT("View '%s' shown."), *ViewName.ToString());
 	return true;
 }
@@ -170,6 +188,7 @@ void UNativeWebView::Hide()
 {
 	check(IsInGameThread());
 	if (Attachment) Attachment->SetVisible(false);
+	if (GpuPresenter) GpuPresenter->SetVisible(false);
 	bVisible = false;
 	UE_LOG(LogNativeWebViewport, Log, TEXT("View '%s' hidden."), *ViewName.ToString());
 }
@@ -194,35 +213,247 @@ bool UNativeWebView::Resize(FIntPoint PixelSize, float DpiScale)
 bool UNativeWebView::AttachToPlayerViewport(int32 ZOrder)
 {
 	check(IsInGameThread());
-	if (bClosed || !Surface || Attachment) return !bClosed && Attachment.IsValid();
+	if (bClosed || !Surface) return false;
+	RequestedPresentationMode = ENativeWebPresentationMode::Slate;
+	bAllowPresentationFallback = false;
+	SlateZOrder = ZOrder;
+	if (ActivePresentationMode == ENativeWebPresentationMode::Slate && Attachment) return true;
+	FNativeWebError ErrorValue;
+	if (!StartSlatePresenter(ErrorValue)) return false;
+	if (GpuPresenter)
+	{
+		GpuPresenter->Shutdown();
+		GpuPresenter.Reset();
+	}
+	ActivePresentationMode = ENativeWebPresentationMode::Slate;
+	bPresentationPending = false;
+	PendingPresentationMode = ENativeWebPresentationMode::None;
+	bPresentationFallbackActive = false;
+	if (Attachment) Attachment->SetVisible(bVisible);
+	PresentationChanged.Broadcast(RequestedPresentationMode, ActivePresentationMode, false, PresentationFailureReason);
+	return true;
+}
+
+bool UNativeWebView::StartSlatePresenter(FNativeWebError& OutError)
+{
+	if (Attachment) return true;
 	ULocalPlayer* Player = OwningPlayer.Get();
 	UGameViewportClient* Viewport = Player ? Player->ViewportClient : nullptr;
-	if (!Viewport)
+	if (!Viewport || !Viewport->GetGameViewportWidget().IsValid())
 	{
-		UE_LOG(LogNativeWebViewport, Warning, TEXT("Cannot attach view '%s': no local-player viewport is available."),
+		OutError = BuildNativeWebError(TEXT("ViewportUnavailable"), TEXT("The local-player Slate viewport is unavailable."), ViewName);
+		UE_LOG(LogNativeWebViewport, Warning, TEXT("Cannot attach Slate presenter for view '%s': no local-player viewport is available."),
 		       *ViewName.ToString());
 		return false;
 	}
 	TSharedRef<SNativeWebView> Widget = SNew(SNativeWebView).View(this).Surface(Surface);
 	Attachment = Widget;
-	Viewport->AddViewportWidgetContent(Widget, ZOrder);
+	Widget->SetVisible(false);
+	Viewport->AddViewportWidgetContent(Widget, SlateZOrder);
 	if (UTextureRenderTarget2D* Texture = Surface->GetOutputTexture()) Widget->SetTexture(Texture);
-	Widget->SetVisible(bVisible);
-	UE_LOG(LogNativeWebViewport, Log, TEXT("View '%s' attached to local-player viewport at Z=%d."),
-	       *ViewName.ToString(), ZOrder);
+	UE_LOG(LogNativeWebViewport, Log, TEXT("Slate presenter candidate attached for view '%s' at Z=%d."),
+	       *ViewName.ToString(), SlateZOrder);
 	return true;
 }
 
 void UNativeWebView::DetachFromPlayerViewport()
 {
 	check(IsInGameThread());
+	RequestedPresentationMode = ENativeWebPresentationMode::Slate;
+	bAllowPresentationFallback = false;
+	DetachPresentation();
+}
+
+void UNativeWebView::RemoveSlatePresenter()
+{
 	if (!Attachment) return;
-	UE_LOG(LogNativeWebViewport, Log, TEXT("Detaching view '%s' from local-player viewport."), *ViewName.ToString());
 	Attachment->SetVisible(false);
 	if (ULocalPlayer* Player = OwningPlayer.Get())
-		if (UGameViewportClient* Viewport = Player->ViewportClient) Viewport->RemoveViewportWidgetContent(
-			Attachment.ToSharedRef());
+		if (UGameViewportClient* Viewport = Player->ViewportClient)
+			Viewport->RemoveViewportWidgetContent(Attachment.ToSharedRef());
 	Attachment.Reset();
+}
+
+bool UNativeWebView::SetPresentationMode(ENativeWebPresentationMode Mode, bool bAllowSlateFallback,
+	                                      FNativeWebError& OutError)
+{
+	check(IsInGameThread());
+	OutError = {};
+	if (bClosed || !Surface)
+	{
+		OutError = BuildNativeWebError(TEXT("Closed"), TEXT("The view is closed."), ViewName);
+		return false;
+	}
+	if (bPresentationPending && Mode == PendingPresentationMode)
+	{
+		bAllowPresentationFallback = bAllowSlateFallback;
+		RequestedPresentationMode = Mode;
+		return true;
+	}
+	if (bPresentationPending)
+	{
+		if (GpuPresenter) { GpuPresenter->Shutdown(); GpuPresenter.Reset(); }
+		bPresentationPending = false;
+		PendingPresentationMode = ENativeWebPresentationMode::None;
+	}
+	RequestedPresentationMode = Mode;
+	bAllowPresentationFallback = bAllowSlateFallback;
+	PresentationFailureReason.Reset();
+	bPresentationFallbackActive = false;
+	UE_LOG(LogNativeWebViewport, Display, TEXT("View '%s' presentation mode requested: %s (fallback=%s)."),
+	       *ViewName.ToString(), *UEnum::GetValueAsString(Mode), bAllowSlateFallback ? TEXT("enabled") : TEXT("disabled"));
+	if (!bVisible && ActivePresentationMode == ENativeWebPresentationMode::None)
+	{
+		bPresentationPending = false;
+		PendingPresentationMode = ENativeWebPresentationMode::None;
+		PresentationChanged.Broadcast(RequestedPresentationMode, ActivePresentationMode, false, PresentationFailureReason);
+		return true;
+	}
+	return StartRequestedPresenter(OutError);
+}
+
+bool UNativeWebView::AttachPresentation()
+{
+	check(IsInGameThread());
+	if (bClosed || !Surface) return false;
+	bVisible = true;
+	if (RequestedPresentationMode == ENativeWebPresentationMode::None) return true;
+	if (bPresentationPending) return true;
+	FNativeWebError OutError;
+	const bool bAttached = StartRequestedPresenter(OutError);
+	if (Attachment) Attachment->SetVisible(true);
+	if (GpuPresenter && ActivePresentationMode == ENativeWebPresentationMode::GpuViewport) GpuPresenter->SetVisible(true);
+	return bAttached || bPresentationPending || ActivePresentationMode != ENativeWebPresentationMode::None;
+}
+
+bool UNativeWebView::StartRequestedPresenter(FNativeWebError& OutError)
+{
+	check(IsInGameThread());
+	if (RequestedPresentationMode == ENativeWebPresentationMode::None)
+	{
+		DetachPresentation();
+		return true;
+	}
+	if (RequestedPresentationMode == ENativeWebPresentationMode::Slate)
+	{
+		if (!StartSlatePresenter(OutError))
+		{
+			SetPresentationFailure(OutError.Message, false);
+			return false;
+		}
+		if (GpuPresenter) { GpuPresenter->Shutdown(); GpuPresenter.Reset(); }
+		ActivePresentationMode = ENativeWebPresentationMode::Slate;
+		bPresentationPending = false;
+		PendingPresentationMode = ENativeWebPresentationMode::None;
+		if (Attachment) Attachment->SetVisible(bVisible);
+		PresentationChanged.Broadcast(RequestedPresentationMode, ActivePresentationMode, false, PresentationFailureReason);
+		UE_LOG(LogNativeWebViewport, Log, TEXT("View '%s' switched to Slate presentation."), *ViewName.ToString());
+		return true;
+	}
+
+	if (ActivePresentationMode == ENativeWebPresentationMode::GpuViewport && GpuPresenter)
+	{
+		GpuPresenter->SetVisible(bVisible);
+		return true;
+	}
+	GpuPresenter = MakeUnique<FNativeWebGpuPresenter>();
+	FString Failure;
+	if (!GpuPresenter->Initialize(this, OwningPlayer.Get(), Surface->GetOutputTexture(), Failure))
+	{
+		GpuPresenter.Reset();
+		OutError = BuildNativeWebError(TEXT("GpuPresenterUnavailable"), Failure, ViewName);
+		SetPresentationFailure(Failure, bAllowPresentationFallback);
+		return false;
+	}
+	bPresentationPending = true;
+	PendingPresentationMode = ENativeWebPresentationMode::GpuViewport;
+	GpuPendingStartedAtSeconds = FPlatformTime::Seconds();
+	PresentationChanged.Broadcast(RequestedPresentationMode, ActivePresentationMode, bPresentationFallbackActive,
+	                              PresentationFailureReason);
+	UE_LOG(LogNativeWebViewport, Display, TEXT("View '%s' GPU presenter is pending render-thread validation."), *ViewName.ToString());
+	return true;
+}
+
+void UNativeWebView::CompletePendingPresentation()
+{
+	if (!bPresentationPending || PendingPresentationMode != ENativeWebPresentationMode::GpuViewport || !GpuPresenter) return;
+	FString Failure;
+	if (GpuPresenter->GetFailure(Failure))
+	{
+		GpuPresenter->Shutdown();
+		GpuPresenter.Reset();
+		bPresentationPending = false;
+		PendingPresentationMode = ENativeWebPresentationMode::None;
+		SetPresentationFailure(Failure, bAllowPresentationFallback);
+		return;
+	}
+	if (!GpuPresenter->IsReady())
+	{
+		if (FPlatformTime::Seconds() - GpuPendingStartedAtSeconds > 5.0)
+		{
+			GpuPresenter->Shutdown();
+			GpuPresenter.Reset();
+			bPresentationPending = false;
+			PendingPresentationMode = ENativeWebPresentationMode::None;
+			SetPresentationFailure(TEXT("The UE scene-view render callback did not become ready within five seconds."),
+			                       bAllowPresentationFallback);
+		}
+		return;
+	}
+	GpuPresenter->Activate(bVisible);
+	RemoveSlatePresenter();
+	ActivePresentationMode = ENativeWebPresentationMode::GpuViewport;
+	bPresentationPending = false;
+	PendingPresentationMode = ENativeWebPresentationMode::None;
+	bPresentationFallbackActive = false;
+	PresentationFailureReason.Reset();
+	PresentationChanged.Broadcast(RequestedPresentationMode, ActivePresentationMode, false, PresentationFailureReason);
+	UE_LOG(LogNativeWebViewport, Display, TEXT("View '%s' GPU viewport presenter is active."), *ViewName.ToString());
+}
+
+void UNativeWebView::SetPresentationFailure(const FString& Reason, bool bTryFallback)
+{
+	PresentationFailureReason = Reason;
+	UE_LOG(LogNativeWebRender, Warning, TEXT("View '%s' presenter failed: %s"), *ViewName.ToString(), *Reason);
+	if (bTryFallback && RequestedPresentationMode == ENativeWebPresentationMode::GpuViewport)
+	{
+		FNativeWebError SlateError;
+		if (StartSlatePresenter(SlateError))
+		{
+			if (GpuPresenter) { GpuPresenter->Shutdown(); GpuPresenter.Reset(); }
+			ActivePresentationMode = ENativeWebPresentationMode::Slate;
+			bPresentationFallbackActive = true;
+			if (Attachment) Attachment->SetVisible(bVisible);
+			UE_LOG(LogNativeWebViewport, Warning, TEXT("View '%s' is using Slate fallback after GPU failure: %s"),
+			       *ViewName.ToString(), *Reason);
+		}
+		else
+		{
+			PresentationFailureReason += FString::Printf(TEXT(" Slate fallback also failed: %s"), *SlateError.Message);
+			UE_LOG(LogNativeWebViewport, Error, TEXT("View '%s' could not activate either presenter: %s"),
+			       *ViewName.ToString(), *PresentationFailureReason);
+		}
+	}
+	else if (ActivePresentationMode == ENativeWebPresentationMode::None)
+	{
+		bPresentationFallbackActive = false;
+	}
+	FNativeWebError PresentationError = BuildNativeWebError(TEXT("PresentationFailure"), PresentationFailureReason, ViewName);
+	Error.Broadcast(PresentationError);
+	PresentationChanged.Broadcast(RequestedPresentationMode, ActivePresentationMode, bPresentationFallbackActive,
+	                              PresentationFailureReason);
+}
+
+void UNativeWebView::DetachPresentation()
+{
+	check(IsInGameThread());
+	if (GpuPresenter) { GpuPresenter->Shutdown(); GpuPresenter.Reset(); }
+	RemoveSlatePresenter();
+	ActivePresentationMode = ENativeWebPresentationMode::None;
+	bPresentationPending = false;
+	PendingPresentationMode = ENativeWebPresentationMode::None;
+	bPresentationFallbackActive = false;
+	PresentationChanged.Broadcast(RequestedPresentationMode, ActivePresentationMode, false, PresentationFailureReason);
 }
 
 UTextureRenderTarget2D* UNativeWebView::GetTexture() const
@@ -234,7 +465,9 @@ UTextureRenderTarget2D* UNativeWebView::GetTexture() const
 bool UNativeWebView::ForwardInput(const FNativeWebInputEvent& Event)
 {
 	check(IsInGameThread());
-	if (bClosed || !bVisible || !Surface)
+	const bool bCleanupEvent = Event.Type == ENativeWebInputType::INPUT_POINTER_UP ||
+	                          Event.Type == ENativeWebInputType::INPUT_FOCUS_LOST;
+	if (((bClosed || !bVisible) && !bCleanupEvent) || !Surface)
 	{
 		UE_LOG(LogNativeWebInput, VeryVerbose, TEXT("Input rejected for view '%s' (closed=%s visible=%s surface=%s)."),
 		       *ViewName.ToString(), bClosed ? TEXT("true") : TEXT("false"),
@@ -493,6 +726,18 @@ bool UNativeWebView::SendBytesToJavaScript(FName Channel, TConstArrayView<uint8>
 void UNativeWebView::Tick()
 {
 	check(IsInGameThread());
+	CompletePendingPresentation();
+	if (!bPresentationPending && ActivePresentationMode == ENativeWebPresentationMode::GpuViewport && GpuPresenter)
+	{
+		FString Failure;
+		if (GpuPresenter->GetFailure(Failure))
+		{
+			GpuPresenter->Shutdown();
+			GpuPresenter.Reset();
+			ActivePresentationMode = ENativeWebPresentationMode::None;
+			SetPresentationFailure(Failure, bAllowPresentationFallback);
+		}
+	}
 #if !PLATFORM_WINDOWS
 	return;
 #else
@@ -601,7 +846,7 @@ void UNativeWebView::Close()
 	UE_LOG(LogNativeWebView, Display, TEXT("Closing NativeWeb view '%s'."), *ViewName.ToString());
 	bVisible = false;
 	++Generation;
-	DetachFromPlayerViewport();
+	DetachPresentation();
 #if PLATFORM_WINDOWS
 	if (Script)
 	{
@@ -616,6 +861,7 @@ void UNativeWebView::Close()
 	}
 	MessageReceived.Clear();
 	Error.Clear();
+	PresentationChanged.Clear();
 	UE_LOG(LogNativeWebView, Verbose, TEXT("NativeWeb view '%s' closed."), *ViewName.ToString());
 }
 

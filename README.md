@@ -24,6 +24,7 @@ other runtime modules provide independent dispatch, image HTTP, and WebSocket
 services.
 
 This repository is a fork of [WebUserInterfaceUnreal](https://github.com/ArtemIyX/WebUserInterfaceUnreal).
+Example VUE App: [NativeWebVueAppExample)(https://github.com/ArtemIyX/NativeWebVueAppExample)
 
 ## Features
 

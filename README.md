@@ -23,8 +23,13 @@ viewport and exchange opaque strings or bytes with its JavaScript runtime. The
 other runtime modules provide independent dispatch, image HTTP, and WebSocket
 services.
 
-This repository is a fork of [WebUserInterfaceUnreal](https://github.com/ArtemIyX/WebUserInterfaceUnreal).
-Example VUE App: [NativeWebVueAppExample](https://github.com/ArtemIyX/NativeWebVueAppExample)
+## Relations
+
+| Type | Repository |
+| --- | --- |
+| Forked from | [WebUserInterfaceUnreal](https://github.com/ArtemIyX/WebUserInterfaceUnreal) |
+| Example Vue app | [NativeWebVueAppExample](https://github.com/ArtemIyX/NativeWebVueAppExample) |
+| Example Unreal app | [NativeWebUnrealExample](https://github.com/ArtemIyX/NativeWebUnrealExample) |
 
 ## Features
 

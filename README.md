@@ -1,11 +1,12 @@
 <p align="center">
-  <img src="Resources/Icon128.png" width="128" height="128" alt="NativeWeb plugin icon">
+  <img width="1280" height="640" alt="NativeWebPreview_low" src="https://github.com/user-attachments/assets/74ed161c-1311-4106-a29c-d8317c173d1a" />
 </p>
+
 
 <h1 align="center">NativeWeb for Unreal Engine</h1>
 
 <p align="center">
-  Native UI views and networking modules for Unreal Engine projects.
+  Native Web UI and networking modules for Unreal Engine projects.
 </p>
 
 <p align="center">

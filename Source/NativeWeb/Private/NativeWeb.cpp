@@ -6,6 +6,7 @@
 #include "Interfaces/IPluginManager.h"
 #include "Misc/Paths.h"
 #include "ShaderCore.h"
+#include "AffineUI/AffineUiSurfaceRenderer.h"
 
 DEFINE_LOG_CATEGORY(LogNativeWeb);
 DEFINE_LOG_CATEGORY(LogNativeWebSubsystem);
@@ -41,6 +42,7 @@ public:
 
 	virtual void ShutdownModule() override
 	{
+		FAffineUiSurfaceRenderer::ShutdownRetirementQueue();
 		UE_LOG(LogNativeWeb, Display, TEXT("NativeWeb module shutting down."));
 	}
 };

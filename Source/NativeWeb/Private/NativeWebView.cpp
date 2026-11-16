@@ -10,6 +10,7 @@
 #include "NativeWeb.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Subsystems/NativeWebLocalPlayerSubsystem.h"
+#include "Subsystems/NativeWebImageSubsystem.h"
 #include "Widgets/NativeWebViewSlate.h"
 #include "NativeWebMessageDelivery.h"
 
@@ -80,12 +81,13 @@ bool UNativeWebView::Initialize(FName InName, const FString& Html, const FString
 	Desc.Content.Css = Css;
 	if (!PackagedAssetRoot.IsEmpty()) Desc.FontDirectory = FPaths::Combine(PackagedAssetRoot, TEXT("fonts"));
 	FString ErrorMessage;
-	Script = FAffineUiScriptInstance::Create(Desc, ErrorMessage);
+	UGameInstance* GameInstance = IsValid(Player) ? Player->GetGameInstance() : nullptr;
+	UNativeWebImageSubsystem* ImageSubsystem = IsValid(GameInstance)
+		? GameInstance->GetSubsystem<UNativeWebImageSubsystem>() : nullptr;
+	Script = FAffineUiScriptInstance::Create(Desc, ImageSubsystem, ErrorMessage);
 	if (!Script)
 	{
-		const FName ErrorCode = ErrorMessage.Contains(TEXT("Only one AffineUI surface"))
-			                        ? FName(TEXT("RendererCapacityUnavailable"))
-			                        : (ErrorMessage.Contains(TEXT("D3D11")) || ErrorMessage.Contains(TEXT("Win64")))
+		const FName ErrorCode = (ErrorMessage.Contains(TEXT("D3D11")) || ErrorMessage.Contains(TEXT("Win64")))
 			                        ? FName(TEXT("UnsupportedRhi"))
 			                        : ErrorMessage.Contains(TEXT("Invalid surface"))
 			                        ? FName(TEXT("InvalidOptions"))
@@ -838,6 +840,14 @@ void UNativeWebView::Tick()
 	bool bPending = false;
 	FQuickJSError JobError;
 	const bool bJobsSucceeded = Script->PumpJobs(256, Jobs, bPending, JobError);
+	FQuickJSError ImageError;
+	if (!Script->DeliverPendingImageEvents(ImageError) && !ImageError.Message.IsEmpty())
+	{
+		FNativeWebError NativeError = BuildNativeWebError(TEXT("ScriptError"), ImageError.Message, ViewName);
+		NativeError.ScriptStack = ImageError.Stack;
+		Error.Broadcast(NativeError);
+		if (!IsValid(this) || bClosed || !Script) return;
+	}
 	if (Jobs > 0 || bPending)
 	{
 		UE_LOG(LogNativeWebTick, VeryVerbose, TEXT("View '%s' QuickJS jobs: executed=%d pending=%s."),

@@ -26,7 +26,7 @@ bool FAffineUiScriptInstanceBridgeTest::RunTest(const FString& Parameters)
 	FAffineUiSurfaceDesc Desc;
 	Desc.Content.Html = TEXT("<html><body><main id=\"app\"></main><p id=\"status\">initial</p></body></html>");
 	FString Error;
-	TUniquePtr<FAffineUiScriptInstance> Instance = FAffineUiScriptInstance::Create(Desc, Error);
+	TUniquePtr<FAffineUiScriptInstance> Instance = FAffineUiScriptInstance::Create(Desc, nullptr, Error);
 	if (!TestTrue(TEXT("QuickJS and AffineUI are created together"), Instance.IsValid()))
 	{
 		AddError(Error);
@@ -34,6 +34,10 @@ bool FAffineUiScriptInstanceBridgeTest::RunTest(const FString& Parameters)
 	}
 	const uint64 InitialDocumentEpoch = Instance->GetSurface()->GetDocumentEpoch();
 	FQuickJSError JsError;
+	TestTrue(TEXT("Image API rejects requests when the game-instance provider subsystem is unavailable"),
+		Instance->Evaluate(TEXT("if(nativeWeb.requestImage('asset','/Game/UI/T_Missing.T_Missing') !== 0) throw new Error('request was not rejected')"), JsError));
+	TestTrue(TEXT("Unknown image leases are released idempotently"),
+		Instance->Evaluate(TEXT("if(nativeWeb.releaseImage(1) !== false) throw new Error('unknown lease was accepted')"), JsError));
 	TestTrue(TEXT("A text mutation is accepted"), Instance->Evaluate(
 		         TEXT("if (nativeWeb.setText('status', 'first') !== true) throw new Error('first mutation rejected')"),
 		         JsError));
@@ -41,10 +45,13 @@ bool FAffineUiScriptInstanceBridgeTest::RunTest(const FString& Parameters)
 		         TEXT(
 			         "if (nativeWeb.setText('status', 'updated') !== true) throw new Error('incremental update rejected')"),
 		         JsError));
+	AddExpectedError(TEXT("element id and text must be valid strings"), EAutomationExpectedErrorFlags::Contains, 1, false);
 	TestFalse(TEXT("An empty element ID is rejected"), Instance->Evaluate(
 		          TEXT("nativeWeb.setText('', 'invalid')"), JsError));
+	AddExpectedError(TEXT("element id and text must be strings"), EAutomationExpectedErrorFlags::Contains, 1, false);
 	TestFalse(TEXT("Non-string bridge arguments are rejected"), Instance->Evaluate(
 		          TEXT("nativeWeb.setText(17, 'invalid')"), JsError));
+	AddExpectedError(TEXT("Error: fixture failure."), EAutomationExpectedErrorFlags::Contains, 1, false);
 	TestFalse(TEXT("JavaScript exceptions are reported"), Instance->Evaluate(
 		          TEXT("throw new Error('fixture failure')"), JsError));
 	TestTrue(TEXT("The JavaScript error is surfaced"), JsError.Message.Contains(TEXT("fixture failure")));
@@ -66,7 +73,7 @@ bool FAffineUiScriptInstanceBridgeTest::RunTest(const FString& Parameters)
 	Instance->Close();
 	TestFalse(TEXT("Closed instances reject evaluation"), Instance->Evaluate(TEXT("1 + 1"), JsError));
 	Instance.Reset();
-	Instance = FAffineUiScriptInstance::Create(Desc, Error);
+	Instance = FAffineUiScriptInstance::Create(Desc, nullptr, Error);
 	TestTrue(TEXT("A new bridge instance can be created after teardown"), Instance.IsValid());
 	if (Instance) { Instance->Close(); }
 	return true;
@@ -89,7 +96,7 @@ bool FAffineUiMessageBridgeTest::RunTest(const FString& Parameters)
 	FAffineUiSurfaceDesc Desc;
 	Desc.Content.Html = TEXT("<html><body></body></html>");
 	FString CreateError;
-	TUniquePtr<FAffineUiScriptInstance> Instance = FAffineUiScriptInstance::Create(Desc, CreateError);
+	TUniquePtr<FAffineUiScriptInstance> Instance = FAffineUiScriptInstance::Create(Desc, nullptr, CreateError);
 	if (!TestTrue(TEXT("Messaging host is created"), Instance.IsValid()))
 	{
 		AddError(CreateError);
@@ -115,6 +122,7 @@ bool FAffineUiMessageBridgeTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Multi-byte typed arrays copy their byte length"), Inbound[3].Bytes.Num(), 2);
 	}
 
+	AddExpectedError(TEXT("NativeWeb message exceeds 1 MiB"), EAutomationExpectedErrorFlags::Contains, 1, false);
 	TestFalse(TEXT("Oversized JS string throws RangeError"), Instance->Evaluate(
 		          TEXT("nativeWeb.postString('x'.repeat(1024*1024+1))"), JsError));
 	TestTrue(TEXT("Oversized JS payload reports RangeError"), JsError.Message.Contains(TEXT("1 MiB")));
@@ -217,7 +225,7 @@ bool FAffineUiVueBundleTest::RunTest(const FString& Parameters)
 	Desc.Content.Css = CssSource;
 	Desc.FontDirectory = FPaths::Combine(AssetDirectory, TEXT("fonts"));
 	FString Error;
-	TUniquePtr<FAffineUiScriptInstance> Instance = FAffineUiScriptInstance::Create(Desc, Error);
+	TUniquePtr<FAffineUiScriptInstance> Instance = FAffineUiScriptInstance::Create(Desc, nullptr, Error);
 	if (!TestTrue(TEXT("Vue bundle surface and QuickJS instance are created"), Instance.IsValid()))
 	{
 		AddError(Error);

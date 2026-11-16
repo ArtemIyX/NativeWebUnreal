@@ -12,7 +12,53 @@ namespace
 	}
 }
 
-TUniquePtr<FAffineUiScriptInstance> FAffineUiScriptInstance::Create(const FAffineUiSurfaceDesc& Desc, FString& OutError)
+struct FAffineUiScriptInstance::FImageLeaseState
+{
+	struct FLease
+	{
+		uint64 ProviderLease = 0;
+		uint64 Epoch = 0;
+		FString Url;
+		FString CacheKey;
+		bool bReservedTerminalEvent = true;
+	};
+	struct FEvent
+	{
+		uint64 Lease = 0;
+		bool bReady = false;
+		FString Url;
+	FString Error;
+		FIntPoint Size = FIntPoint::ZeroValue;
+	};
+	TWeakObjectPtr<UNativeWebImageSubsystem> Subsystem;
+	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface;
+	TMap<uint64, FLease> Active;
+	TArray<FEvent> Events;
+	uint64 NextLease = 1;
+	uint64 Epoch = 0;
+	bool bClosing = false;
+	int32 ReservedEvents = 0;
+};
+
+void FAffineUiScriptInstance::CloseImageLeases()
+{
+	check(IsInGameThread());
+	if (!ImageLeases) return;
+	ImageLeases->bClosing = true;
+	ImageLeases->Events.Reset();
+	ImageLeases->ReservedEvents = 0;
+	for (const auto& Pair : ImageLeases->Active)
+	{
+		if (UNativeWebImageSubsystem* Subsystem = ImageLeases->Subsystem.Get())
+			Subsystem->ReleaseImage(Pair.Value.ProviderLease);
+		if (TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> PinnedSurface = ImageLeases->Surface.Pin())
+			PinnedSurface->RemoveImage(Pair.Value.Epoch, Pair.Key, Pair.Value.Url);
+	}
+	ImageLeases->Active.Reset();
+}
+
+TUniquePtr<FAffineUiScriptInstance> FAffineUiScriptInstance::Create(const FAffineUiSurfaceDesc& Desc,
+	UNativeWebImageSubsystem* ImageSubsystem, FString& OutError)
 {
 	check(IsInGameThread());
 	UE_LOG(LogNativeWebScript, Log, TEXT("Creating QuickJS bridge (surface=%dx%d)."), Desc.PixelSize.X,
@@ -36,6 +82,10 @@ TUniquePtr<FAffineUiScriptInstance> FAffineUiScriptInstance::Create(const FAffin
 	TUniquePtr<FAffineUiScriptInstance> Instance(new FAffineUiScriptInstance());
 	Instance->Surface = MoveTemp(NewSurface);
 	Instance->DocumentEpoch = Instance->Surface->GetDocumentEpoch();
+	Instance->ImageLeases = MakeShared<FImageLeaseState, ESPMode::ThreadSafe>();
+	Instance->ImageLeases->Subsystem = ImageSubsystem;
+	Instance->ImageLeases->Surface = Instance->Surface;
+	Instance->ImageLeases->Epoch = Instance->DocumentEpoch;
 	Instance->Runtime = MoveTemp(NewRuntime);
 	JSContext* Context = Instance->Runtime->GetContext();
 	JS_SetContextOpaque(Context, Instance.Get());
@@ -67,12 +117,16 @@ TUniquePtr<FAffineUiScriptInstance> FAffineUiScriptInstance::Create(const FAffin
 	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::PostString, "postString", 2));
 	JS_SetPropertyStr(Context, Api, "postBytes",
 	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::PostBytes, "postBytes", 2));
+	JS_SetPropertyStr(Context, Api, "requestImage",
+	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::RequestImage, "requestImage", 2));
+	JS_SetPropertyStr(Context, Api, "releaseImage",
+	                  JS_NewCFunction(Context, &FAffineUiScriptInstance::ReleaseImage, "releaseImage", 1));
 	JS_SetPropertyStr(Context, Global, "nativeWeb", Api);
 	JS_FreeValue(Context, Global);
 	FQuickJSError BootstrapError;
 	JSValue BootstrapResult = JS_UNDEFINED;
 	const FString Bootstrap = TEXT(
-		"(()=>{const listeners=[];Object.defineProperty(nativeWeb,'addMessageListener',{value:function(listener){if(typeof listener!=='function')throw new TypeError('listener must be a function');listeners.push(listener);let active=true;return()=>{if(!active)return;active=false;const i=listeners.indexOf(listener);if(i>=0)listeners.splice(i,1)}}});Object.defineProperty(nativeWeb,'__dispatchMessages',{value:function(messages){const errors=[];for(const message of messages){for(const listener of listeners.slice()){try{listener(message)}catch(error){errors.push(String(error))}}}return errors}})})();");
+		"(()=>{const listeners=[];const imageListeners=[];const subscribe=(target,listener)=>{if(typeof listener!=='function')throw new TypeError('listener must be a function');target.push(listener);let active=true;return()=>{if(!active)return;active=false;const i=target.indexOf(listener);if(i>=0)target.splice(i,1)}};Object.defineProperty(nativeWeb,'addMessageListener',{value:function(listener){return subscribe(listeners,listener)}});Object.defineProperty(nativeWeb,'addImageListener',{value:function(listener){return subscribe(imageListeners,listener)}});Object.defineProperty(nativeWeb,'__dispatchMessages',{value:function(messages){const errors=[];for(const message of messages){for(const listener of listeners.slice()){try{listener(message)}catch(error){errors.push(String(error))}}}return errors}});Object.defineProperty(nativeWeb,'__dispatchImages',{value:function(events){const errors=[];for(const event of events){for(const listener of imageListeners.slice()){try{listener(event)}catch(error){errors.push(String(error))}}}return errors}})})();");
 	if (!Instance->Runtime->Evaluate(Bootstrap, TEXT("<nativeweb-bootstrap>"), EQuickJSSourceType::Script,
 	                                 BootstrapResult, BootstrapError))
 	{
@@ -274,10 +328,70 @@ void FAffineUiScriptInstance::RefreshDocumentEpoch()
 	check(IsInGameThread());
 	if (Surface)
 	{
-		DocumentEpoch = Surface->GetDocumentEpoch();
+		const uint64 NewEpoch = Surface->GetDocumentEpoch();
+		if (NewEpoch != DocumentEpoch)
+		{
+			UNativeWebImageSubsystem* ImageSubsystem = ImageLeases ? ImageLeases->Subsystem.Get() : nullptr;
+			CloseImageLeases();
+			ImageLeases = MakeShared<FImageLeaseState, ESPMode::ThreadSafe>();
+			ImageLeases->Subsystem = ImageSubsystem;
+			ImageLeases->Surface = Surface;
+			ImageLeases->Epoch = NewEpoch;
+			DocumentEpoch = NewEpoch;
+		}
 		UE_LOG(LogNativeWebScript, VeryVerbose, TEXT("Script bridge document epoch refreshed to %llu."),
 		       static_cast<unsigned long long>(DocumentEpoch));
 	}
+}
+
+bool FAffineUiScriptInstance::DeliverPendingImageEvents(FQuickJSError& OutError)
+{
+	check(IsInGameThread());
+	if (!Runtime || !Runtime->IsOpen() || !ImageLeases || ImageLeases->Events.IsEmpty()) return true;
+	TArray<FImageLeaseState::FEvent> Events = MoveTemp(ImageLeases->Events);
+	ImageLeases->Events.Reset();
+	ImageLeases->ReservedEvents = FMath::Max(0, ImageLeases->ReservedEvents - Events.Num());
+	for (const auto& Event : Events)
+		if (FImageLeaseState::FLease* Lease = ImageLeases->Active.Find(Event.Lease))
+			Lease->bReservedTerminalEvent = false;
+	JSContext* Context = Runtime->GetContext();
+	JSValue Global = JS_GetGlobalObject(Context);
+	JSValue NativeWeb = JS_GetPropertyStr(Context, Global, "nativeWeb");
+	JSValue Dispatch = JS_GetPropertyStr(Context, NativeWeb, "__dispatchImages");
+	JS_FreeValue(Context, NativeWeb);
+	JS_FreeValue(Context, Global);
+	if (!JS_IsFunction(Context, Dispatch)) { JS_FreeValue(Context, Dispatch); return false; }
+	JSValue Array = JS_NewArray(Context);
+	for (int32 Index = 0; Index < Events.Num(); ++Index)
+	{
+		const auto& Event = Events[Index];
+		JSValue Item = JS_NewObject(Context);
+		JS_SetPropertyStr(Context, Item, "lease", JS_NewInt64(Context, static_cast<int64>(Event.Lease)));
+		JS_SetPropertyStr(Context, Item, "status", JS_NewString(Context, Event.bReady ? "ready" : "error"));
+		if (Event.bReady)
+		{
+			const FTCHARToUTF8 Url(*Event.Url);
+			JS_SetPropertyStr(Context, Item, "url", JS_NewStringLen(Context, Url.Get(), Url.Length()));
+			JS_SetPropertyStr(Context, Item, "width", JS_NewInt32(Context, Event.Size.X));
+			JS_SetPropertyStr(Context, Item, "height", JS_NewInt32(Context, Event.Size.Y));
+		}
+		else
+		{
+			const FTCHARToUTF8 Error(*Event.Error);
+			JS_SetPropertyStr(Context, Item, "error", JS_NewStringLen(Context, Error.Get(), Error.Length()));
+		}
+		JS_SetPropertyUint32(Context, Array, Index, Item);
+	}
+	JSValue Result = JS_UNDEFINED;
+	FQuickJSError Error;
+	const bool bSuccess = Runtime->Call(Dispatch, JS_UNDEFINED, 1, &Array, Result, Error);
+	if (!bSuccess)
+		UE_LOG(LogNativeWebScript, Warning, TEXT("Native image event dispatch failed: %s"), *Error.Message);
+	OutError = MoveTemp(Error);
+	JS_FreeValue(Context, Result);
+	JS_FreeValue(Context, Array);
+	JS_FreeValue(Context, Dispatch);
+	return bSuccess;
 }
 
 bool FAffineUiScriptInstance::DeliverMessageToJavaScript(const FNativeWebMessage& Message, FQuickJSError& OutError)
@@ -587,6 +701,108 @@ JSValue FAffineUiScriptInstance::CreateNode(JSContext* C, int32 N, JSValueConst*
 	return JS_NewInt64(C, static_cast<int64>(Id));
 }
 
+JSValue FAffineUiScriptInstance::RequestImage(JSContext* C, JSValueConst, int32 N, JSValueConst* A)
+{
+	if (N != 2 || !JS_IsString(A[0]) || !JS_IsString(A[1]))
+		return JS_ThrowTypeError(C, "requestImage expects a provider name and key");
+	bool bProviderValid = false;
+	bool bKeyValid = false;
+	const FString ProviderText = ReadString(C, A[0], bProviderValid);
+	const FString Key = ReadString(C, A[1], bKeyValid);
+	if (JS_HasException(C)) return JS_EXCEPTION;
+	if (!bProviderValid || !bKeyValid || ProviderText.IsEmpty() || Key.IsEmpty() ||
+		ProviderText.Len() > 128 || Key.Len() > 4096 || HasEmbeddedNull(ProviderText) || HasEmbeddedNull(Key))
+		return JS_ThrowTypeError(C, "provider name or image key is invalid");
+	FAffineUiScriptInstance* Instance = static_cast<FAffineUiScriptInstance*>(JS_GetContextOpaque(C));
+	if (!Instance || !Instance->ImageLeases || Instance->bClosing)
+		return JS_ThrowInternalError(C, "script instance is closed");
+	const TSharedPtr<FImageLeaseState, ESPMode::ThreadSafe> State = Instance->ImageLeases;
+	if (State->bClosing || State->Active.Num() >= 64 || State->ReservedEvents >= 64 || State->NextLease >= (1ull << 53))
+		return JS_NewInt32(C, 0);
+	UNativeWebImageSubsystem* Subsystem = State->Subsystem.Get();
+	if (!Subsystem) return JS_NewInt32(C, 0);
+	const uint64 LeaseId = State->NextLease++;
+	const FString GpuBudgetNamespace = Subsystem->GetGpuBudgetNamespace();
+	const uint64 MaxGpuBytes = Subsystem->GetMaxGpuBytes();
+	FImageLeaseState::FLease Lease;
+	Lease.Epoch = State->Epoch;
+	Lease.Url = FString::Printf(TEXT("nativeweb-image://%llu/%llu"),
+		static_cast<unsigned long long>(Lease.Epoch), static_cast<unsigned long long>(LeaseId));
+	Lease.CacheKey = Subsystem->MakeCacheKey(FName(*ProviderText), Key);
+	State->Active.Add(LeaseId, Lease);
+	++State->ReservedEvents;
+	const uint64 ProviderLease = Subsystem->RequestImage(FName(*ProviderText), Key,
+		[State, LeaseId, GpuBudgetNamespace, MaxGpuBytes](uint64 ResolvedLease, UTexture2D* Texture, const FString& Error)
+		{
+			if (!State || State->bClosing || State->Epoch == 0 || State->Events.Num() >= State->ReservedEvents) return;
+			FImageLeaseState::FLease* Active = State->Active.Find(LeaseId);
+			if (!Active || ResolvedLease != Active->ProviderLease || Active->Epoch != State->Epoch) return;
+			FImageLeaseState::FEvent Event;
+			Event.Lease = LeaseId;
+			Event.Url = Active->Url;
+			if (!Texture)
+			{
+				Event.Error = Error.IsEmpty() ? TEXT("Image provider returned no texture.") : Error;
+				State->Events.Add(MoveTemp(Event));
+				return;
+			}
+			if (TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface = State->Surface.Pin())
+			{
+				const FString Url = Active->Url;
+				const FString CacheKey = Active->CacheKey;
+				const uint64 Epoch = Active->Epoch;
+				if (Surface->InstallImage(Epoch, LeaseId, Url, CacheKey, GpuBudgetNamespace, MaxGpuBytes, Texture,
+					[State, LeaseId, Epoch, Url](bool bInstalled, FIntPoint Size, const FString& InstallError)
+					{
+						if (State->bClosing || State->Epoch != Epoch) return;
+						FImageLeaseState::FLease* Current = State->Active.Find(LeaseId);
+						if (!Current || Current->Url != Url || State->Events.Num() >= State->ReservedEvents) return;
+						FImageLeaseState::FEvent Terminal;
+						Terminal.Lease = LeaseId;
+						Terminal.bReady = bInstalled;
+						Terminal.Url = Url;
+						Terminal.Size = Size;
+						Terminal.Error = InstallError;
+						State->Events.Add(MoveTemp(Terminal));
+					}))
+					return;
+			}
+			Event.Error = TEXT("Image surface is no longer available.");
+			State->Events.Add(MoveTemp(Event));
+		});
+	if (ProviderLease == 0)
+	{
+		State->Active.Remove(LeaseId);
+		--State->ReservedEvents;
+		return JS_NewInt32(C, 0);
+	}
+	if (FImageLeaseState::FLease* Active = State->Active.Find(LeaseId)) Active->ProviderLease = ProviderLease;
+	return JS_NewFloat64(C, static_cast<double>(LeaseId));
+}
+
+JSValue FAffineUiScriptInstance::ReleaseImage(JSContext* C, JSValueConst, int32 N, JSValueConst* A)
+{
+	if (N != 1) return JS_ThrowTypeError(C, "releaseImage expects a lease ID");
+	double Number = 0.0;
+	if (JS_ToFloat64(C, &Number, A[0]) < 0 || !FMath::IsFinite(Number) || Number <= 0.0 ||
+		Number >= 9007199254740992.0 || static_cast<double>(static_cast<uint64>(Number)) != Number)
+		return JS_ThrowTypeError(C, "lease ID must be a positive safe integer");
+	FAffineUiScriptInstance* Instance = static_cast<FAffineUiScriptInstance*>(JS_GetContextOpaque(C));
+	if (!Instance || !Instance->ImageLeases) return JS_FALSE;
+	const uint64 LeaseId = static_cast<uint64>(Number);
+	FImageLeaseState::FLease Lease;
+	if (!Instance->ImageLeases->Active.RemoveAndCopyValue(LeaseId, Lease)) return JS_FALSE;
+	for (int32 Index = Instance->ImageLeases->Events.Num() - 1; Index >= 0; --Index)
+		if (Instance->ImageLeases->Events[Index].Lease == LeaseId)
+			Instance->ImageLeases->Events.RemoveAt(Index, 1, EAllowShrinking::No);
+	if (Lease.bReservedTerminalEvent)
+		Instance->ImageLeases->ReservedEvents = FMath::Max(0, Instance->ImageLeases->ReservedEvents - 1);
+	if (Instance->ImageLeases->Subsystem.IsValid()) Instance->ImageLeases->Subsystem->ReleaseImage(Lease.ProviderLease);
+	if (TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface = Instance->ImageLeases->Surface.Pin())
+		Surface->RemoveImage(Lease.Epoch, LeaseId, Lease.Url);
+	return JS_TRUE;
+}
+
 JSValue FAffineUiScriptInstance::MountRoot(JSContext* C, JSValueConst, int32 N, JSValueConst* A)
 {
 	if (N != 1 || !JS_IsString(A[0])) return JS_ThrowTypeError(C, "mountRoot expects an element ID");
@@ -737,6 +953,7 @@ void FAffineUiScriptInstance::Close()
 	UE_LOG(LogNativeWebScript, Display, TEXT("Closing QuickJS bridge (inbound=%d outbound=%d)."),
 	       InboundMessages.Num(), OutboundMessages.Num());
 	bClosing = true;
+	CloseImageLeases();
 	{
 		FScopeLock Lock(&MessageMutex);
 		InboundMessages.Reset();

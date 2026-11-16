@@ -17,7 +17,7 @@
 
 /**
  * @brief Local-player owner and factory for reusable NativeWeb views.
- * @details Tracks named view UObjects, advances their bounded message/QuickJS work, and enforces the current one-live-AffineUI-surface process limit.
+ * @details Tracks named view UObjects and advances their bounded message/QuickJS work. Each view owns an independent AffineUI surface.
  * @ingroup NativeWeb
  */
 UCLASS()
@@ -59,8 +59,8 @@ public:
 	 * @param ContentRelativeDirectory Project-Content-relative package directory containing ui.css and ui.js.
 	 * @param SurfaceConfig Initial AffineUI surface dimensions, DPI, and clear color.
 	 * @param PresentationConfig Built-in presenter, fallback, and Slate z-order settings.
-	 * @param OutError Receives a structured failure reason, including platform or occupied surface capacity.
-	 * @return The initialized view, or nullptr if validation, file loading, runtime creation, or capacity checks fail.
+	 * @param OutError Receives a structured failure reason.
+	 * @return The initialized view, or nullptr if validation, file loading, or runtime creation fails.
 	 * @details Generates a small HTML shell containing #app; the package does not need index.html. Optional fonts may be placed in a fonts subdirectory.
 	 * @note Game-thread only. Packaged file resolution occurs before render-lane work.
 	 * @see CreateInlineView, FNativeWebSurfaceConfig, FNativeWebPresentationConfig
@@ -87,7 +87,7 @@ public:
 	 * @param SurfaceConfig Initial AffineUI surface dimensions, DPI, and clear color.
 	 * @param PresentationConfig Built-in presenter, fallback, and Slate z-order settings.
 	 * @param OutError Receives a structured failure reason.
-	 * @return The initialized view, or nullptr if validation, runtime creation, or surface capacity checks fail.
+	 * @return The initialized view, or nullptr if validation or runtime creation fails.
 	 * @details Inline startup JavaScript remains explicit through UNativeWebView::EvaluateScript.
 	 * @note Game-thread only. The subsystem owns and ticks the returned UObject.
 	 */
@@ -119,7 +119,7 @@ public:
 	 * @brief Closes and unregisters the named view.
 	 * @param Name Name supplied when the view was created.
 	 * @return True if a registered view was found and closed; false if the name is unknown.
-	 * @details Closing invalidates pending callbacks/messages and releases the process-wide surface capacity.
+	 * @details Closing invalidates pending callbacks/messages and retires this view's independent surface.
 	 * @note Game-thread only. @ref UNativeWebView::Close is also idempotent.
 	 * @par Example
 	 * Invocation example; substitute arguments that satisfy the function contract.

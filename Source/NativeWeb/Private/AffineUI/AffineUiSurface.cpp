@@ -4,19 +4,19 @@
 #include "Containers/Ticker.h"
 #include "DynamicRHI.h"
 #include "Engine/TextureRenderTarget2D.h"
+#include "Engine/Texture2D.h"
 #include "Misc/FileHelper.h"
 #include "HAL/FileManager.h"
 #include "NativeWeb.h"
 #include "RenderCommandFence.h"
 #include "RenderingThread.h"
 #include "RHICommandList.h"
+#include "TextureResource.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UObjectGlobals.h"
 
 namespace
 {
-	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> ActiveSurface;
-
 	bool IsValidDescriptor(FIntPoint Size, float DpiScale)
 	{
 		return Size.X > 0 && Size.Y > 0 && Size.X <= 4096 && Size.Y <= 4096 &&
@@ -115,12 +115,6 @@ TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> FAffineUiSurface::Create(
 		UE_LOG(LogNativeWebAffineUi, Error, TEXT("Surface creation rejected: %s"), *OutError);
 		return nullptr;
 	}
-	if (ActiveSurface.IsValid())
-	{
-		OutError = TEXT("Only one AffineUI surface can be active in this process.");
-		UE_LOG(LogNativeWebAffineUi, Error, TEXT("Surface capacity rejected creation: %s"), *OutError);
-		return nullptr;
-	}
 	if (!IsValidDescriptor(Desc.PixelSize, Desc.DpiScale) || Desc.ClearColor.A != 255 ||
 		ContainsEmbeddedNull(Desc.Content.Html) || ContainsEmbeddedNull(Desc.Content.Css))
 	{
@@ -154,7 +148,6 @@ TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> FAffineUiSurface::Create(
 	}
 	Surface->Impl->FontAssets = MakeShared<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe>(
 		MoveTemp(PreloadedFonts));
-	ActiveSurface = Surface;
 	UE_LOG(LogNativeWebAffineUi, Display, TEXT("AffineUI surface created; preloaded %d font asset(s)."),
 	       Surface->Impl->FontAssets->Num());
 	Surface->StartPending();
@@ -253,6 +246,45 @@ bool FAffineUiSurface::RequestRedraw()
 	Impl->bDirty = true;
 	StartPending();
 	return true;
+}
+
+bool FAffineUiSurface::InstallImage(uint64 DocumentEpoch, uint64 LeaseId, const FString& Url,
+	const FString& CacheKey, const FString& GpuBudgetNamespace, uint64 MaxGpuBytes, UTexture2D* Texture,
+	TFunction<void(bool, FIntPoint, const FString&)>&& Completion)
+{
+	check(IsInGameThread());
+	if (Impl->bClosed || DocumentEpoch != Impl->DocumentEpoch || LeaseId == 0 || !IsValid(Texture) ||
+		Url.IsEmpty() || ContainsEmbeddedNull(Url))
+	{
+		if (Completion) Completion(false, FIntPoint::ZeroValue, TEXT("Image request is stale or invalid."));
+		return false;
+	}
+	FTextureResource* Resource = Texture->GetResource();
+	if (!Resource || !Resource->TextureRHI.IsValid())
+	{
+		if (Completion) Completion(false, FIntPoint::ZeroValue, TEXT("Texture resource is not available."));
+		return false;
+	}
+	// Ensure the RHI-owned AffineUI state exists before the ordered install command runs.
+	if (!RequestRedraw()) return false;
+	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> WeakSurface = AsShared();
+	Impl->Renderer.InstallImage(Url, CacheKey, GpuBudgetNamespace, MaxGpuBytes, DocumentEpoch, Resource->TextureRHI,
+		[WeakSurface, Completion = MoveTemp(Completion)](bool bInstalled, FIntPoint Size, const FString& Error) mutable
+		{
+			if (bInstalled)
+				if (TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface = WeakSurface.Pin())
+					Surface->RequestRedraw();
+			if (Completion) Completion(bInstalled, Size, Error);
+		});
+	return true;
+}
+
+void FAffineUiSurface::RemoveImage(uint64 DocumentEpoch, uint64 LeaseId, const FString& Url)
+{
+	check(IsInGameThread());
+	if (Impl->bClosed || DocumentEpoch == 0 || LeaseId == 0 || Url.IsEmpty()) return;
+	if (!RequestRedraw()) return;
+	Impl->Renderer.RemoveImage(Url, DocumentEpoch);
 }
 
 bool FAffineUiSurface::SetTextById(const FString& ElementId, const FString& Text)
@@ -491,7 +523,9 @@ void FAffineUiSurface::OnRenderComplete(uint64 Revision, EAffineUiRenderResult R
 	(void)KeepAlive;
 	Impl->bInFlight = false;
 	Impl->DeferredMutations.MarkConsumed();
-	const bool bSuccess = Result == EAffineUiRenderResult::Success;
+	const bool bSuccess = Result == EAffineUiRenderResult::Success ||
+		Result == EAffineUiRenderResult::SuccessWithActiveAnimations;
+	const bool bHasActiveAnimations = Result == EAffineUiRenderResult::SuccessWithActiveAnimations;
 	if (bSuccess && Revision == Impl->DesiredRevision)
 	{
 		TStrongObjectPtr<UTextureRenderTarget2D> PreviousOutput = MoveTemp(Impl->Output);
@@ -530,6 +564,11 @@ void FAffineUiSurface::OnRenderComplete(uint64 Revision, EAffineUiRenderResult R
 					}), 0.25f);
 			}
 		}
+		if (!Impl->bClosed && bHasActiveAnimations && Revision == Impl->DesiredRevision)
+		{
+			++Impl->DesiredRevision;
+			Impl->bDirty = true;
+		}
 	}
 	else
 	{
@@ -559,6 +598,7 @@ void FAffineUiSurface::Close()
 	       static_cast<unsigned long long>(Impl->DesiredRevision),
 	       static_cast<unsigned long long>(Impl->DocumentEpoch));
 	Impl->bClosed = true;
+	Impl->bDirty = false;
 	Impl->OnTextureReady.Unbind();
 	Impl->OnError.Unbind();
 	Impl->OnClick.Unbind();
@@ -578,6 +618,5 @@ void FAffineUiSurface::Close()
 	Impl->Pending.Reset();
 	Impl->Output.Reset();
 	Impl->Retired.Reset();
-	if (ActiveSurface.Pin().Get() == this) { ActiveSurface.Reset(); }
 	UE_LOG(LogNativeWebAffineUi, Verbose, TEXT("AffineUI surface closed."));
 }

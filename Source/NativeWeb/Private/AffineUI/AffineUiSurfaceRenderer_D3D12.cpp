@@ -1,9 +1,6 @@
 #include "AffineUiSurfaceRenderer_D3D12.h"
 
-#include "Async/Async.h"
 #include "DynamicRHI.h"
-#include "HAL/PlatformProcess.h"
-#include "HAL/PlatformTime.h"
 #include "NativeWeb.h"
 #include "RHICommandList.h"
 #include "RHIResources.h"
@@ -54,6 +51,16 @@ struct FNativeWebD3D12BridgeSlot
 	FGPUFenceRHIRef UnrealCopyFence;
 	uint64 ProducerValue = 0;
 	bool bBusy = false;
+};
+
+struct FNativeWebD3D12ImageInput
+{
+	TRefCountPtr<ID3D12Resource> Transfer12;
+	TRefCountPtr<ID3D11Texture2D> Transfer11;
+	FTextureRHIRef Normalized;
+	uint64 ProducerValue = 0;
+	uint64 LastConsumerValue = 0;
+	uint64 AllocationBytes = 0;
 };
 
 class FNativeWebD3D12BridgeImpl final : public TSharedFromThis<FNativeWebD3D12BridgeImpl, ESPMode::ThreadSafe>
@@ -162,83 +169,207 @@ public:
 
 		const TSharedRef<FNativeWebD3D12BridgeImpl, ESPMode::ThreadSafe> Self = AsShared();
 		const FTextureRHIRef TransitionTexture = Output;
-		Async(EAsyncExecution::ThreadPool,
-		      [Self, Slot, Output = MoveTemp(Output), TransitionTexture,
-			      Completion = MoveTemp(Completion)]() mutable
-		      {
-			      const double StartTime = FPlatformTime::Seconds();
-			      for (;;)
-			      {
-				      if (Self->bShuttingDown.Load()) return;
-				      const HRESULT Device11Reason = Self->Device11->GetDeviceRemovedReason();
-				      const HRESULT Device12Reason = Self->Device12 ? Self->Device12->GetDeviceRemovedReason() : S_OK;
-				      if (FAILED(Device11Reason) || FAILED(Device12Reason) ||
-					      (FPlatformTime::Seconds() - StartTime) > 5.0)
-				      {
-					      ENQUEUE_RENDER_COMMAND(NativeWebD3D12ProducerFailure)(
-						      [Self, Slot, Completion = MoveTemp(Completion)](FRHICommandListImmediate&) mutable
-						      {
-							      Slot->bBusy = false;
-							      Completion(EAffineUiRenderResult::Failure);
-						      });
-					      return;
-				      }
-				      if (Self->ReadyFence12->GetCompletedValue() >= Slot->ProducerValue) break;
-				      FPlatformProcess::SleepNoStats(0.001f);
-			      }
-
-			      ENQUEUE_RENDER_COMMAND(NativeWebD3D12Copy)(
-				      [Self, Slot, Output = MoveTemp(Output), TransitionTexture,
-					      Completion = MoveTemp(Completion)](
-				      FRHICommandListImmediate& RHICmdList) mutable
-				      {
-					      RHICmdList.Transition(FRHITransitionInfo(TransitionTexture.GetReference(),
-					                                               ERHIAccess::Unknown,
-					                                               ERHIAccess::CopyDest));
-					      RHICmdList.EnqueueLambda(
-						      [Self, Slot, Output = MoveTemp(Output), Completion = MoveTemp(Completion)](
-						      FRHICommandListBase& ExecutingCmdList) mutable
-						      {
-							      Self->CopyOnExecutingCommandList(ExecutingCmdList, Slot, Output,
-							                                       MoveTemp(Completion));
-						      });
-					      RHICmdList.Transition(FRHITransitionInfo(TransitionTexture.GetReference(),
-					                                               ERHIAccess::CopyDest,
-					                                               ERHIAccess::SRVMask));
-				      });
-		      });
+		ENQUEUE_RENDER_COMMAND(NativeWebD3D12Copy)(
+			[Self, Slot, Output = MoveTemp(Output), TransitionTexture, Completion = MoveTemp(Completion)](
+			FRHICommandListImmediate& RHICmdList) mutable
+			{
+				RHICmdList.Transition(FRHITransitionInfo(TransitionTexture.GetReference(), ERHIAccess::Unknown,
+					ERHIAccess::CopyDest));
+				RHICmdList.EnqueueLambda(
+					[Self, Slot, Output = MoveTemp(Output), Completion = MoveTemp(Completion)](
+					FRHICommandList& ExecutingCmdList) mutable
+					{
+						ID3D12DynamicRHI* Rhi = GetID3D12DynamicRHI();
+						if (!Rhi || !Self->ReadyFence12 || !Self->Device12 ||
+							FAILED(Self->Device12->GetDeviceRemovedReason()))
+						{
+							Completion(EAffineUiRenderResult::Failure);
+							return;
+						}
+						Rhi->RHIWaitManualFence(ExecutingCmdList, Self->ReadyFence12.GetReference(), Slot->ProducerValue);
+						Self->CopyOnExecutingCommandList(ExecutingCmdList, Slot, Output, MoveTemp(Completion));
+					});
+				RHICmdList.Transition(FRHITransitionInfo(TransitionTexture.GetReference(), ERHIAccess::CopyDest,
+					ERHIAccess::SRVMask));
+			});
 		return true;
+	}
+
+	bool CreateInput(FIntPoint Size, TSharedPtr<FNativeWebD3D12ImageInput, ESPMode::ThreadSafe>& OutInput,
+	                 FString& OutError)
+	{
+		OutInput.Reset();
+		if (bShuttingDown.Load() || Size.X <= 0 || Size.Y <= 0 || Size.X > 4096 || Size.Y > 4096)
+		{
+			OutError = TEXT("D3D12 image input dimensions are invalid or the bridge is shutting down.");
+			return false;
+		}
+		D3D12_RESOURCE_DESC Desc{};
+		Desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+		Desc.Width = Size.X;
+		Desc.Height = Size.Y;
+		Desc.DepthOrArraySize = 1;
+		Desc.MipLevels = 1;
+		Desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		Desc.SampleDesc.Count = 1;
+		Desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+		Desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
+		D3D12_HEAP_PROPERTIES Heap{};
+		Heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+		Heap.CreationNodeMask = NodeMask;
+		Heap.VisibleNodeMask = NodeMask;
+		TSharedPtr<FNativeWebD3D12ImageInput, ESPMode::ThreadSafe> Input = MakeShared<
+			FNativeWebD3D12ImageInput, ESPMode::ThreadSafe>();
+		HRESULT Result = Device12->CreateCommittedResource(&Heap, D3D12_HEAP_FLAG_SHARED, &Desc,
+			D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(Input->Transfer12.GetInitReference()));
+		if (FAILED(Result)) return Fail(OutError, TEXT("Create shared RGBA8 image input"), Result);
+		FScopedHandle TextureHandle;
+		Result = Device12->CreateSharedHandle(Input->Transfer12.GetReference(), nullptr, GENERIC_ALL, nullptr,
+			&TextureHandle.Value);
+		if (FAILED(Result)) return Fail(OutError, TEXT("Create shared RGBA8 image input handle"), Result);
+		Result = Device11f->OpenSharedResource1(TextureHandle.Value,
+			IID_PPV_ARGS(Input->Transfer11.GetInitReference()));
+		if (FAILED(Result)) return Fail(OutError, TEXT("Open shared RGBA8 image input on D3D11"), Result);
+		D3D11_TEXTURE2D_DESC OpenedDesc{};
+		Input->Transfer11->GetDesc(&OpenedDesc);
+		if (OpenedDesc.Width != static_cast<UINT>(Size.X) || OpenedDesc.Height != static_cast<UINT>(Size.Y) ||
+			OpenedDesc.MipLevels != 1 || OpenedDesc.ArraySize != 1 || OpenedDesc.SampleDesc.Count != 1 ||
+			OpenedDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM)
+		{
+			OutError = TEXT("Opened D3D12 image input is not a single-sample RGBA8 2D texture.");
+			return false;
+		}
+		D3D12_RESOURCE_ALLOCATION_INFO Allocation = Device12->GetResourceAllocationInfo(NodeMask, 1, &Desc);
+		Input->AllocationBytes = Allocation.SizeInBytes;
+		OutInput = MoveTemp(Input);
+		return true;
+	}
+
+	uint64 GetInputAllocationBytes(FIntPoint Size) const
+	{
+		if (!Device12 || Size.X <= 0 || Size.Y <= 0 || Size.X > 4096 || Size.Y > 4096) return 0;
+		D3D12_RESOURCE_DESC Desc{};
+		Desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+		Desc.Width = Size.X;
+		Desc.Height = Size.Y;
+		Desc.DepthOrArraySize = 1;
+		Desc.MipLevels = 1;
+		Desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		Desc.SampleDesc.Count = 1;
+		Desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+		Desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
+		const D3D12_RESOURCE_ALLOCATION_INFO Allocation = Device12->GetResourceAllocationInfo(NodeMask, 1, &Desc);
+		return Allocation.SizeInBytes == UINT64_MAX ? 0 : Allocation.SizeInBytes;
+	}
+
+	bool CopyInput(FRHICommandList& Executing, const FTextureRHIRef& Normalized,
+	               const TSharedRef<FNativeWebD3D12ImageInput, ESPMode::ThreadSafe>& Input, FString& OutError)
+	{
+		if (!Normalized.IsValid() || !Input->Transfer12.IsValid() || !IsRHID3D12())
+		{
+			OutError = TEXT("D3D12 normalized image input is unavailable.");
+			return false;
+		}
+		ID3D12DynamicRHI* Rhi = GetID3D12DynamicRHI();
+		if (!Rhi || Rhi->RHIGetDevice(0) != Device12 ||
+			Rhi->RHIGetDeviceNodeMask(0) != NodeMask || (NodeMask & (NodeMask - 1)) != 0)
+		{
+			OutError = TEXT("NativeWeb D3D12 shared images require the active single-node GPU0 device.");
+			return false;
+		}
+		Rhi->RHIFlushResourceBarriers(Executing, 0);
+		ID3D12GraphicsCommandList* List = Rhi->RHIGetGraphicsCommandList(Executing, 0);
+		ID3D12Resource* Source = Rhi->RHIGetResource(Normalized.GetReference());
+		if (!List || !Source)
+		{
+			OutError = TEXT("Could not acquire the executing D3D12 graphics command list or normalized resource.");
+			return false;
+		}
+		Rhi->RHIUpdateResourceResidency(Executing, 0, Normalized.GetReference());
+		D3D12_RESOURCE_BARRIER Barrier{};
+		Barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		Barrier.Transition.pResource = Input->Transfer12.GetReference();
+		Barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		Barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+		Barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+		List->ResourceBarrier(1, &Barrier);
+		List->CopyResource(Input->Transfer12.GetReference(), Source);
+		Barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+		Barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+		List->ResourceBarrier(1, &Barrier);
+		Input->Normalized = Normalized;
+		Input->ProducerValue = ++NextImageProducerValue;
+		Rhi->RHISignalManualFence(Executing, ImageReadyFence12.GetReference(), Input->ProducerValue);
+		return true;
+	}
+
+	bool WaitInputsBeforeExecute(TConstArrayView<TSharedPtr<FNativeWebD3D12ImageInput, ESPMode::ThreadSafe>> Inputs,
+	                             FString& OutError)
+	{
+		if (!ImmediateContext4 || !ImageReadyFence11)
+		{
+			OutError = TEXT("D3D12 image consumer fence is unavailable.");
+			return false;
+		}
+		for (const auto& Input : Inputs)
+		{
+			if (Input.IsValid() && Input->ProducerValue > 0)
+			{
+				const HRESULT Result = ImmediateContext4->Wait(ImageReadyFence11.GetReference(), Input->ProducerValue);
+				if (FAILED(Result)) return Fail(OutError, TEXT("D3D11 wait for normalized image producer"), Result);
+			}
+		}
+		return true;
+	}
+
+	bool MarkInputsConsumed(TConstArrayView<TSharedPtr<FNativeWebD3D12ImageInput, ESPMode::ThreadSafe>> Inputs,
+	                        FString& OutError)
+	{
+		if (!ImmediateContext4 || !ImageConsumedFence11)
+		{
+			OutError = TEXT("D3D12 image retirement fence is unavailable.");
+			return false;
+		}
+		const uint64 Value = ++NextImageConsumerValue;
+		const HRESULT Result = ImmediateContext4->Signal(ImageConsumedFence11.GetReference(), Value);
+		if (FAILED(Result)) return Fail(OutError, TEXT("Signal D3D12 image consumer fence"), Result);
+		for (const auto& Input : Inputs) if (Input.IsValid()) Input->LastConsumerValue = Value;
+		Immediate11->Flush();
+		return true;
+	}
+
+	bool IsInputRetired(const FNativeWebD3D12ImageInput& Input) const
+	{
+		if (!ImageReadyFence12 || !ImageConsumedFence12) return false;
+		const uint64 Produced = ImageReadyFence12->GetCompletedValue();
+		const uint64 Consumed = ImageConsumedFence12->GetCompletedValue();
+		if (Produced == UINT64_MAX || Consumed == UINT64_MAX) return false;
+		return Produced >= Input.ProducerValue && Consumed >= Input.LastConsumerValue;
 	}
 
 	void Shutdown()
 	{
-		if (bShuttingDown.Load()) return;
 		bShuttingDown.Store(true);
-		const TSharedRef<FNativeWebD3D12BridgeImpl, ESPMode::ThreadSafe> Self = AsShared();
-		Async(EAsyncExecution::ThreadPool, [Self]()
-		{
-			const double StartTime = FPlatformTime::Seconds();
-			for (;;)
-			{
-				FNativeWebD3D12BridgeImpl::PollCompletedSlots(Self->Slots);
-				Self->CollectRetiredSlots();
-				bool bAllRetired = true;
-				for (const TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>& Slot : Self->Slots)
-				{
-					if (Slot->bBusy)
-					{
-						bAllRetired = false;
-						break;
-					}
-				}
-				bAllRetired = bAllRetired && Self->RetiredSlots.IsEmpty();
-				if (bAllRetired || (FPlatformTime::Seconds() - StartTime) > 5.0) break;
-				FPlatformProcess::SleepNoStats(0.001f);
-			}
-			Self->Slots.Reset();
-			Self->RetiredSlots.Reset();
-		});
 	}
+
+	void PollRetirements_RHI()
+	{
+		PollCompletedSlots(Slots);
+		CollectRetiredSlots();
+		if (bShuttingDown.Load() && RetiredSlots.IsEmpty())
+		{
+			bool bHasBusySlot = false;
+			for (const TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>& Slot : Slots)
+				if (Slot.IsValid() && Slot->bBusy) { bHasBusySlot = true; break; }
+			if (!bHasBusySlot)
+			{
+				Slots.Reset();
+				bShutdownComplete.Store(true);
+			}
+		}
+	}
+
+	bool IsShutdownComplete_RHI() const { return bShutdownComplete.Load(); }
 
 private:
 	static void PollCompletedSlots(TArray<TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>>& InSlots)
@@ -334,6 +465,20 @@ private:
 		if (FAILED(Result)) return Fail(OutError, TEXT("Create shared producer fence handle"), Result);
 		Result = Device11f->OpenSharedFence(FenceHandle.Value, IID_PPV_ARGS(ReadyFence11.GetInitReference()));
 		if (FAILED(Result)) return Fail(OutError, TEXT("Open shared producer fence"), Result);
+		auto CreateFencePair = [this, &OutError](TRefCountPtr<ID3D12Fence>& Fence12,
+			TRefCountPtr<ID3D11Fence>& Fence11, const TCHAR* Name) -> bool
+		{
+			HRESULT FenceResult = Device12->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(Fence12.GetInitReference()));
+			if (FAILED(FenceResult)) return Fail(OutError, Name, FenceResult);
+			FScopedHandle SharedHandle;
+			FenceResult = Device12->CreateSharedHandle(Fence12.GetReference(), nullptr, GENERIC_ALL, nullptr,
+				&SharedHandle.Value);
+			if (FAILED(FenceResult)) return Fail(OutError, TEXT("Create shared image fence handle"), FenceResult);
+			FenceResult = Device11f->OpenSharedFence(SharedHandle.Value, IID_PPV_ARGS(Fence11.GetInitReference()));
+			return FAILED(FenceResult) ? Fail(OutError, TEXT("Open shared image fence on D3D11"), FenceResult) : true;
+		};
+		if (!CreateFencePair(ImageReadyFence12, ImageReadyFence11, TEXT("Create image producer fence")) ||
+			!CreateFencePair(ImageConsumedFence12, ImageConsumedFence11, TEXT("Create image consumer fence"))) return false;
 		return CreateSlots(Size, OutError);
 	}
 
@@ -470,13 +615,20 @@ private:
 	TRefCountPtr<ID3D11DeviceContext> Deferred11;
 	TRefCountPtr<ID3D11Fence> ReadyFence11;
 	TRefCountPtr<ID3D12Fence> ReadyFence12;
+	TRefCountPtr<ID3D11Fence> ImageReadyFence11;
+	TRefCountPtr<ID3D12Fence> ImageReadyFence12;
+	TRefCountPtr<ID3D11Fence> ImageConsumedFence11;
+	TRefCountPtr<ID3D12Fence> ImageConsumedFence12;
 	ID3D12Device* Device12 = nullptr;
 	TArray<TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>> Slots;
 	TArray<TSharedPtr<FNativeWebD3D12BridgeSlot, ESPMode::ThreadSafe>> RetiredSlots;
 	FIntPoint CurrentSize = FIntPoint::ZeroValue;
 	uint32 NodeMask = 0;
 	uint64 NextProducerValue = 0;
+	uint64 NextImageProducerValue = 0;
+	uint64 NextImageConsumerValue = 0;
 	TAtomic<bool> bShuttingDown{false};
+	TAtomic<bool> bShutdownComplete{false};
 };
 
 
@@ -561,8 +713,78 @@ bool FNativeWebD3D12Bridge::QueueCopy(
 		Impl->QueueCopy(Slot->Native, MoveTemp(Output), MoveTemp(Completion));
 }
 
+bool FNativeWebD3D12Bridge::CreateInput_RHI(FIntPoint Size,
+	TSharedPtr<FInput, ESPMode::ThreadSafe>& OutInput, FString& OutError)
+{
+	check(IsInRenderingThread() || IsInRHIThread());
+	OutInput.Reset();
+	if (!Impl) return false;
+	TSharedPtr<FNativeWebD3D12ImageInput, ESPMode::ThreadSafe> Native;
+	if (!Impl->CreateInput(Size, Native, OutError)) return false;
+	OutInput = MakeShared<FInput, ESPMode::ThreadSafe>();
+	OutInput->Native = MoveTemp(Native);
+	return true;
+}
+
+bool FNativeWebD3D12Bridge::CopyInput_RHI(FRHICommandList& Executing, const FTextureRHIRef& Normalized,
+	const TSharedRef<FInput, ESPMode::ThreadSafe>& Input, FString& OutError)
+{
+	check(IsInRenderingThread() || IsInRHIThread());
+	return Impl && Input->Native.IsValid() && Impl->CopyInput(Executing, Normalized,
+		Input->Native.ToSharedRef(), OutError);
+}
+
+ID3D11Texture2D* FNativeWebD3D12Bridge::GetInputTexture(const FInput& Input) const
+{
+	return Input.Native.IsValid() ? Input.Native->Transfer11.GetReference() : nullptr;
+}
+
+uint64 FNativeWebD3D12Bridge::GetInputAllocationBytes_RHI(FIntPoint Size) const
+{
+	check(IsInRenderingThread() || IsInRHIThread());
+	return Impl ? Impl->GetInputAllocationBytes(Size) : 0;
+}
+
+bool FNativeWebD3D12Bridge::WaitInputsBeforeExecute_RHI(
+	TConstArrayView<TSharedPtr<FInput, ESPMode::ThreadSafe>> Inputs, FString& OutError)
+{
+	check(IsInRenderingThread() || IsInRHIThread());
+	if (!Impl) return false;
+	TArray<TSharedPtr<FNativeWebD3D12ImageInput, ESPMode::ThreadSafe>> Native;
+	for (const TSharedPtr<FInput, ESPMode::ThreadSafe>& Input : Inputs)
+		if (Input.IsValid() && Input->Native.IsValid()) Native.Add(Input->Native);
+	return Impl->WaitInputsBeforeExecute(Native, OutError);
+}
+
+bool FNativeWebD3D12Bridge::MarkInputsConsumed_RHI(
+	TConstArrayView<TSharedPtr<FInput, ESPMode::ThreadSafe>> Inputs, FString& OutError)
+{
+	check(IsInRenderingThread() || IsInRHIThread());
+	if (!Impl) return false;
+	TArray<TSharedPtr<FNativeWebD3D12ImageInput, ESPMode::ThreadSafe>> Native;
+	for (const TSharedPtr<FInput, ESPMode::ThreadSafe>& Input : Inputs)
+		if (Input.IsValid() && Input->Native.IsValid()) Native.Add(Input->Native);
+	return Impl->MarkInputsConsumed(Native, OutError);
+}
+
+bool FNativeWebD3D12Bridge::IsInputRetired_RHI(const FInput& Input) const
+{
+	check(IsInRenderingThread() || IsInRHIThread());
+	return Impl && Input.Native.IsValid() && Impl->IsInputRetired(*Input.Native);
+}
+
 void FNativeWebD3D12Bridge::Shutdown()
 {
 	if (Impl) Impl->Shutdown();
+}
+
+void FNativeWebD3D12Bridge::PollRetirements_RHI()
+{
+	if (Impl) Impl->PollRetirements_RHI();
+}
+
+bool FNativeWebD3D12Bridge::IsShutdownComplete_RHI() const
+{
+	return !Impl || Impl->IsShutdownComplete_RHI();
 }
 #endif

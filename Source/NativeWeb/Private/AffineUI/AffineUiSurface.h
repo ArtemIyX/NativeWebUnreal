@@ -16,6 +16,7 @@
  * @ingroup NativeWeb
  */
 class UTextureRenderTarget2D;
+class UTexture2D;
 class FAffineUiSurfaceRenderer;
 
 /** An owned HTML/CSS snapshot. Relative asset URLs are not resolved by this surface. */
@@ -55,6 +56,7 @@ enum class EAffineUiMutationKind : uint8
 enum class EAffineUiRenderResult : uint8
 {
 	Success,
+	SuccessWithActiveAnimations,
 	Deferred,
 	Failure,
 	Pending
@@ -194,6 +196,11 @@ public:
 	 */
 
 	bool RequestRedraw();
+	/** Resolves and installs a lease image on the renderer lane. */
+	bool InstallImage(uint64 DocumentEpoch, uint64 LeaseId, const FString& Url, const FString& CacheKey,
+		const FString& GpuBudgetNamespace, uint64 MaxGpuBytes, UTexture2D* Texture,
+		TFunction<void(bool, FIntPoint, const FString&)>&& Completion);
+	void RemoveImage(uint64 DocumentEpoch, uint64 LeaseId, const FString& Url);
 	/** Queue textContent replacement for an existing element ID without replacing HTML. True means queued, not yet rendered.
 * @param ElementId Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
 * @param Text Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.

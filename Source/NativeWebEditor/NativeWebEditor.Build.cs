@@ -7,8 +7,9 @@ public class NativeWebEditor : ModuleRules
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
-			"Core", "CoreUObject", "Engine", "NativeWeb", "AssetRegistry", "DataValidation",
-			"DesktopPlatform", "PropertyEditor", "Slate", "SlateCore", "UnrealEd"
+			"Core", "CoreUObject", "Engine", "NativeWeb", "AssetRegistry", "AssetDefinition",
+			"DataValidation", "DesktopPlatform", "EngineAssetDefinitions", "Projects", "PropertyEditor",
+			"Slate", "SlateCore", "UnrealEd"
 		});
 	}
 }

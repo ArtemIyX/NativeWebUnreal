@@ -20,6 +20,10 @@ class FTextureRenderTargetResource;
 class FAffineUiSurfaceRenderer
 {
 public:
+	FAffineUiSurfaceRenderer();
+	FAffineUiSurfaceRenderer(const FAffineUiSurfaceRenderer&) = delete;
+	FAffineUiSurfaceRenderer& operator=(const FAffineUiSurfaceRenderer&) = delete;
+
 	/**
 	 * @brief Performs the draw operation.
 	* @param Target Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
@@ -63,6 +67,10 @@ public:
 
 	void DispatchInput(FAffineUiInput Input, FIntPoint TextureSize, uint64 DocumentEpoch,
 	                   TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface);
+	void InstallImage(FString Url, FString CacheKey, FString GpuBudgetNamespace, uint64 MaxGpuBytes,
+		uint64 DocumentEpoch, FTextureRHIRef Source,
+		TFunction<void(bool, FIntPoint, const FString&)>&& Completion);
+	void RemoveImage(FString Url, uint64 DocumentEpoch);
 	/**
 	 * @brief Performs the shutdown operation.
 	 * @note QuickJS/view APIs are game-thread owned; AffineUI D3D11 work runs on the RHI lane.
@@ -75,8 +83,12 @@ public:
 	 */
 
 	void Shutdown();
+	static void ShutdownRetirementQueue();
 
 private:
 	class FState;
-	FState* State = nullptr;
+	static bool TickRetirementQueue(float DeltaSeconds);
+	static TArray<TSharedPtr<FState, ESPMode::ThreadSafe>> RetiringStates;
+	static FTSTicker::FDelegateHandle RetirementQueueTicker;
+	TSharedPtr<FState, ESPMode::ThreadSafe> State;
 };

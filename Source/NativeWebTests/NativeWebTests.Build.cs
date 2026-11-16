@@ -33,6 +33,7 @@ public class NativeWebTests : ModuleRules
                 "NativeWebDispatch",
                 "NativeWebWebSocketServer",
                 "RHI",
+                "RenderCore",
                 "Slate",
                 "SlateCore"
             }

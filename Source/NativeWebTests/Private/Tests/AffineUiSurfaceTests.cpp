@@ -25,8 +25,18 @@ bool FAffineUiSurfaceLifecycleTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("A surface can be created"), Surface.IsValid())) { return false; }
 
 	FString OtherError;
-	TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Other = FAffineUiSurface::Create(Desc, OtherError);
-	TestFalse(TEXT("A second surface is rejected"), Other.IsValid());
+	FAffineUiSurfaceDesc OtherDesc = Desc;
+	OtherDesc.Content.Html = TEXT("<html><body><p>Independent surface</p></body></html>");
+	TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Other = FAffineUiSurface::Create(OtherDesc, OtherError);
+	if (!TestTrue(TEXT("A second surface can be created concurrently"), Other.IsValid()))
+	{
+		AddError(OtherError);
+		Surface->Close();
+		return false;
+	}
+	TestNotEqual(TEXT("Concurrent surfaces have independent owners"), Surface.Get(), Other.Get());
+	TestTrue(TEXT("The first surface accepts its own content update"), Surface->SetContent(Desc.Content));
+	TestTrue(TEXT("The second surface accepts its independent content update"), Other->SetContent(OtherDesc.Content));
 	TestFalse(TEXT("Zero width is rejected"), Surface->Resize(FIntPoint(0, 240)));
 	TestFalse(TEXT("Oversized targets are rejected"), Surface->Resize(FIntPoint(4097, 240)));
 	TestFalse(TEXT("Nonpositive DPI is rejected"), Surface->Resize(FIntPoint(480, 240), 0.0f));
@@ -36,6 +46,7 @@ bool FAffineUiSurfaceLifecycleTest::RunTest(const FString& Parameters)
 	UTextureRenderTarget2D* PreviousOutput = Surface->GetOutputTexture();
 	const FString Missing = FPaths::Combine(FPaths::ProjectSavedDir(), FGuid::NewGuid().ToString(),
 	                                        TEXT("missing.html"));
+	AddExpectedError(TEXT("Could not read HTML file:"), EAutomationExpectedErrorFlags::Contains, 1, false);
 	TestFalse(TEXT("A missing HTML file is reported"), Surface->LoadContentFromFiles(Missing, Missing, Error));
 	TestFalse(TEXT("A missing file produces an error"), Error.IsEmpty());
 	TestTrue(TEXT("Failed loading keeps the published output"), Surface->GetOutputTexture() == PreviousOutput);
@@ -43,6 +54,7 @@ bool FAffineUiSurfaceLifecycleTest::RunTest(const FString& Parameters)
 	                                            TEXT("NativeWeb/Resources/Demo/viewport.html"));
 	if (FPaths::FileExists(ExampleHtml))
 	{
+		AddExpectedError(TEXT("Could not read CSS file:"), EAutomationExpectedErrorFlags::Contains, 1, false);
 		TestFalse(TEXT("A missing CSS file is reported"), Surface->LoadContentFromFiles(ExampleHtml, Missing, Error));
 		TestTrue(TEXT("The CSS error identifies the failed file"), Error.Contains(TEXT("CSS")));
 		TestTrue(TEXT("A missing CSS file keeps the published output"), Surface->GetOutputTexture() == PreviousOutput);
@@ -52,10 +64,15 @@ bool FAffineUiSurfaceLifecycleTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Closed surfaces reject new content"), Surface->SetContent(Desc.Content));
 	TestFalse(TEXT("Closed surfaces reject resize"), Surface->Resize(FIntPoint(320, 200)));
 	Surface.Reset();
+	TestTrue(TEXT("The concurrent surface remains usable after its peer closes"),
+		Other->Resize(FIntPoint(240, 120)) && Other->RequestRedraw());
+	Other->Close();
+	TestFalse(TEXT("Each closed surface rejects further resize"), Other->Resize(FIntPoint(320, 200)));
+	Other.Reset();
 
-	Other = FAffineUiSurface::Create(Desc, OtherError);
-	TestTrue(TEXT("A surface can be created again after close"), Other.IsValid());
-	if (Other) { Other->Close(); }
+	TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Recreated = FAffineUiSurface::Create(Desc, OtherError);
+	TestTrue(TEXT("A surface can be created again after close"), Recreated.IsValid());
+	if (Recreated) { Recreated->Close(); }
 	return true;
 }
 

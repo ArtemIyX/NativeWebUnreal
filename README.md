@@ -174,3 +174,29 @@ for test groups and invocation examples.
 
 NativeWeb is distributed under the [MIT License](LICENSE). See the license
 file for the full terms.
+# Native image providers
+
+`UNativeWebImageSubsystem` is owned by the game instance and registers the built-in `asset` namespace. Its keys are Unreal soft object paths (for example `/Game/UI/T_Icon.T_Icon`). Texture assets should be included by normal project cooking references; NativeWeb does not scan project content or force synchronous loads.
+
+Applications can add a C++ provider for application-specific identifiers:
+
+```cpp
+class UInventoryImageProvider : public UNativeWebImageProvider
+{
+    GENERATED_BODY()
+public:
+    virtual void ResolveImage(const FString& Key, FResolveCompletion Completion) override
+    {
+        FNativeWebImageResolution Result;
+        Result.SoftTexture = ResolveInventoryTexturePath(Key);
+        if (!Result.SoftTexture.IsValid()) Result.Error = TEXT("Unknown inventory image key.");
+        Completion(MoveTemp(Result)); // completion runs on the game thread
+    }
+};
+```
+
+Register the provider with `GetGameInstance()->GetSubsystem<UNativeWebImageSubsystem>()->RegisterProvider(TEXT("inventory"), Provider)`, then pass `provider="inventory"` and the matching key to the Vue `NativeImage` component. Supported inputs are sampled, single-sample, single-slice 2D color textures. Virtual textures, texture arrays, depth formats, and unsupported formats are rejected. Normalization is GPU-only, straight-alpha RGBA8, and bounded to 4096 by 4096 while preserving aspect ratio.
+
+Default cache settings are 128 entries, 32 pending source loads, 64 MiB GPU allocation budget, and a 10 second idle lifetime. Active leases pin their image entries. Do not force garbage collection or globally unload assets when releasing a view image.
+
+Use `SetCacheLimits` to configure metadata entry/pending limits and the shared idle lifetime, and `SetGpuCacheBudgetBytes` to set the per-game-instance GPU allocation limit. `GetGpuCacheUsage` reports charged bytes in three stages: **active** allocations are referenced by live views, **retiring** allocations remain pinned until their final GPU marker completes, and **cached** allocations are idle and eligible for TTL eviction. The subsystem ticker schedules idle GPU sweeps without requiring another image request; subsystem shutdown evicts idle allocations and marks active or retiring allocations for eviction after their final release.

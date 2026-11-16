@@ -10,6 +10,7 @@
 #include "CoreMinimal.h"
 #include "AffineUiSurface.h"
 #include "NativeWebView.h"
+#include "Subsystems/NativeWebImageSubsystem.h"
 #include "HAL/CriticalSection.h"
 #if PLATFORM_WINDOWS
 #include "QuickJSRuntime.h"
@@ -32,7 +33,8 @@ public:
 	@endcode
 	 */
 
-	static TUniquePtr<FAffineUiScriptInstance> Create(const FAffineUiSurfaceDesc& Desc, FString& OutError);
+	static TUniquePtr<FAffineUiScriptInstance> Create(const FAffineUiSurfaceDesc& Desc,
+		UNativeWebImageSubsystem* ImageSubsystem, FString& OutError);
 	~FAffineUiScriptInstance();
 	FAffineUiScriptInstance(const FAffineUiScriptInstance&) = delete;
 	/**
@@ -161,6 +163,7 @@ public:
 	 */
 
 	void RefreshDocumentEpoch();
+	bool DeliverPendingImageEvents(FQuickJSError& OutError);
 	/**
 	 * @brief Returns surface.
 	 * @return A shared result; it is invalid when the resource is unavailable.
@@ -409,6 +412,8 @@ private:
 	 */
 
 	static JSValue PostBytes(JSContext* Context, JSValueConst ThisValue, int32 ArgCount, JSValueConst* Args);
+	static JSValue RequestImage(JSContext* Context, JSValueConst ThisValue, int32 ArgCount, JSValueConst* Args);
+	static JSValue ReleaseImage(JSContext* Context, JSValueConst ThisValue, int32 ArgCount, JSValueConst* Args);
 	/**
 	 * @brief Creates node.
 	 * @details This entry point is part of the owning type/module contract. It uses the declared input and output parameters; consult the owning type documentation for lifecycle, ownership, threading, and failure context.
@@ -455,6 +460,8 @@ private:
 	 */
 
 	uint64 AllocateNodeId();
+	struct FImageLeaseState;
+	void CloseImageLeases();
 	/**
 	 * @brief Performs the queue operation.
 	* @param Mutation Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
@@ -494,5 +501,6 @@ private:
 	bool bClosing = false;
 	uint64 DocumentEpoch = 0;
 	uint64 NextNodeId = 1;
+	TSharedPtr<FImageLeaseState, ESPMode::ThreadSafe> ImageLeases;
 };
 #endif // PLATFORM_WINDOWS

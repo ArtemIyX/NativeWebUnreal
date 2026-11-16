@@ -137,9 +137,9 @@ to the project's `Content` directory.
 ## View lifecycle and presentation
 
 - `CreatePackagedView` and `CreateInlineView` create the view and register it with
-  the owning local-player subsystem. Creation fails for an empty/duplicate
-  name, invalid content path/options, unsupported renderer, or occupied
-  single-surface capacity.
+  the owning local-player subsystem. Multiple named views can own independent
+  AffineUI surfaces at the same time. Creation fails for an empty/duplicate
+  name, invalid content path/options, or unsupported renderer.
 - The default `PresentationMode` is `GpuViewport`. It samples the existing
   opaque output texture in a UE 5.7 scene-view extension after scene rendering
   and upscaling. Slate/UMG is composed later and can cover the GPU view; GPU

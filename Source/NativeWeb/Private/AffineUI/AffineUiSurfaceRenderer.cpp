@@ -1,4 +1,5 @@
 #include "AffineUiSurfaceRenderer.h"
+#include "Images/NativeWebImageGpu.h"
 
 #include "Async/Async.h"
 #include "Misc/FileHelper.h"
@@ -112,10 +113,79 @@ namespace
 class FAffineUiSurfaceRenderer::FState
 {
 public:
+	struct FInstalledImage
+	{
+		FNativeWebNormalizedImage Normalized;
+		FString CacheKey;
+		TSharedPtr<FNativeWebD3D12Bridge::FInput, ESPMode::ThreadSafe> D3D12Input;
+		TRefCountPtr<ID3D11Query> LastD3D11Marker;
+		uint64 AdditionalGpuBytes = 0;
+		uint64 DocumentEpoch = 0;
+		bool bAffineRegistered = false;
+	};
+
 	~FState()
 	{
 		if (Ui) { affineui_ui_destroy(Ui); }
 		if (D3D12Bridge) { D3D12Bridge->Shutdown(); }
+	}
+
+	void AdvanceRetirement(FRHICommandListImmediate& RHICmdList)
+	{
+		if (bFinalized.Load()) return;
+		if (!bClosing)
+		{
+			bClosing = true;
+			bRetirementPending.Store(true);
+			TArray<FString> ActiveUrls;
+			InstalledImages.GetKeys(ActiveUrls);
+			for (const FString& Url : ActiveUrls)
+				if (const FInstalledImage* Image = InstalledImages.Find(Url)) RemoveImage(Url, Image->DocumentEpoch);
+		}
+		ID3D11DeviceContext* Immediate = D3D12Bridge.IsValid() ? D3D12Bridge->GetImmediateContext() : nullptr;
+		if (!Immediate && IsRHID3D11())
+			if (ID3D11DynamicRHI* Rhi = GetID3D11DynamicRHI()) Immediate = Rhi->RHIGetDeviceContext();
+		PollRetiredImages(Immediate);
+		if (!RetiredImages.IsEmpty() || !InstalledImages.IsEmpty()) return;
+		if (LastFrameMarker.IsValid())
+		{
+			if (!Immediate || Immediate->GetData(LastFrameMarker.GetReference(), nullptr, 0,
+				D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) return;
+			LastFrameMarker.SafeRelease();
+		}
+		if (D3D12Bridge)
+		{
+			D3D12Bridge->Shutdown();
+			D3D12Bridge->PollRetirements_RHI();
+			if (!D3D12Bridge->IsShutdownComplete_RHI()) return;
+		}
+		if (Ui)
+		{
+			affineui_ui_destroy(Ui);
+			Ui = nullptr;
+		}
+		if (D3D12Bridge)
+		{
+			D3D12Bridge.Reset();
+		}
+		bFinalized.Store(true);
+		bRetirementPending.Store(false);
+	}
+
+	bool IsFinalized() const { return bFinalized.Load(); }
+	bool HasPendingRetirement() const { return bRetirementPending.Load(); }
+	void MarkRetirementPending() { bRetirementPending.Store(true); }
+	void PollRetirements(FRHICommandListImmediate& RHICmdList)
+	{
+		if (bClosing)
+		{
+			AdvanceRetirement(RHICmdList);
+			return;
+		}
+		ID3D11DeviceContext* Immediate = D3D12Bridge.IsValid() ? D3D12Bridge->GetImmediateContext() : nullptr;
+		if (!Immediate && IsRHID3D11())
+			if (ID3D11DynamicRHI* Rhi = GetID3D11DynamicRHI()) Immediate = Rhi->RHIGetDeviceContext();
+		PollRetiredImages(Immediate);
 	}
 
 
@@ -126,6 +196,7 @@ public:
 	                             TSharedRef<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe> InFontAssets,
 	                             TFunction<void(EAffineUiRenderResult)>&& Completion)
 	{
+		if (bClosing) return EAffineUiRenderResult::Failure;
 		UE_LOG(LogNativeWebRender, VeryVerbose,
 		       TEXT("RHI render starting (size=%dx%d dpi=%.2f epoch=%llu textMutations=%d mutations=%d)."),
 		       Size.X, Size.Y, DpiScale, static_cast<unsigned long long>(InDocumentEpoch),
@@ -179,6 +250,7 @@ public:
 		{
 			return Fail(TEXT("D3D11 producer device or output is unavailable"));
 		}
+		PollRetiredImages(Immediate);
 
 		TRefCountPtr<ID3D11RenderTargetView> ColorView;
 		TRefCountPtr<ID3D11DepthStencilView> DepthView;
@@ -405,6 +477,10 @@ public:
 		Target.clear = 1;
 		Target.d3d11_render_view = ColorView.GetReference();
 		Target.d3d11_depth_stencil_view = DepthView.GetReference();
+		D3D11_QUERY_DESC QueryDesc{D3D11_QUERY_EVENT, 0};
+		TRefCountPtr<ID3D11Query> Marker;
+		Result = Device->CreateQuery(&QueryDesc, Marker.GetInitReference());
+		if (FAILED(Result) || !Marker) return Fail(TEXT("Create image retirement marker"), Result);
 		affineui_ui_render(Ui, &Target);
 		if (bAffineError)
 		{
@@ -416,6 +492,7 @@ public:
 			DiscardRecordedCommands();
 			return Fail(TEXT("AffineUI draw reported an error"));
 		}
+		const bool bFrameHasActiveAnimations = affineui_ui_has_active_animations(Ui) != 0;
 
 		Context->ClearState();
 		Context->CopyResource(Destination, Color.GetReference());
@@ -436,13 +513,32 @@ public:
 		}
 		if (bD3D12)
 		{
+			TArray<TSharedPtr<FNativeWebD3D12Bridge::FInput, ESPMode::ThreadSafe>> Inputs;
+			for (const auto& Pair : InstalledImages) if (Pair.Value.D3D12Input.IsValid()) Inputs.Add(Pair.Value.D3D12Input);
+			FString ImageFenceError;
+			if (!Inputs.IsEmpty() && !D3D12Bridge->WaitInputsBeforeExecute_RHI(Inputs, ImageFenceError))
+				return Fail(*ImageFenceError);
 			FString ProducerError;
-			if (!D3D12Bridge->SubmitProducer(*Slot, Commands.GetReference(), ProducerError))
+			const bool bProducerSubmitted = D3D12Bridge->SubmitProducer(*Slot, Commands.GetReference(), ProducerError);
+			Immediate->End(Marker.GetReference());
+			Immediate->Flush();
+			LastFrameMarker = Marker;
+			for (auto& Pair : InstalledImages) Pair.Value.LastD3D11Marker = Marker;
+			if (!bProducerSubmitted)
 			{
 				UE_LOG(LogNativeWebRender, Error, TEXT("%s"), *ProducerError);
 				return EAffineUiRenderResult::Failure;
 			}
-			if (!D3D12Bridge->QueueCopy(Slot, Output, MoveTemp(Completion)))
+			if (!Inputs.IsEmpty() && !D3D12Bridge->MarkInputsConsumed_RHI(Inputs, ImageFenceError))
+				return Fail(*ImageFenceError);
+			TFunction<void(EAffineUiRenderResult)> AnimationCompletion =
+				[Completion, bFrameHasActiveAnimations](EAffineUiRenderResult CompletedResult) mutable
+				{
+					if (CompletedResult == EAffineUiRenderResult::Success && bFrameHasActiveAnimations)
+						CompletedResult = EAffineUiRenderResult::SuccessWithActiveAnimations;
+					Completion(CompletedResult);
+				};
+			if (!D3D12Bridge->QueueCopy(Slot, Output, MoveTemp(AnimationCompletion)))
 			{
 				return EAffineUiRenderResult::Failure;
 			}
@@ -452,11 +548,142 @@ public:
 			return EAffineUiRenderResult::Pending;
 		}
 		Immediate->ExecuteCommandList(Commands.GetReference(), true);
+		Immediate->End(Marker.GetReference());
+		LastFrameMarker = Marker;
+		for (auto& Pair : InstalledImages) Pair.Value.LastD3D11Marker = Marker;
 		RenderedSize = Size;
 		RenderedDpiScale = DpiScale;
 		UE_LOG(LogNativeWebRender, VeryVerbose, TEXT("RHI render completed (size=%dx%d epoch=%llu)."),
 		       Size.X, Size.Y, static_cast<unsigned long long>(DocumentEpoch));
-		return EAffineUiRenderResult::Success;
+		return bFrameHasActiveAnimations ? EAffineUiRenderResult::SuccessWithActiveAnimations :
+			EAffineUiRenderResult::Success;
+	}
+
+	bool InstallImage(FRHICommandList& RHICmdList, const FString& Url, const FString& CacheKey,
+		uint64 MaxGpuBytes, uint64 InDocumentEpoch,
+		FNativeWebNormalizedImage Normalized, TFunction<void(bool, FIntPoint, const FString&)>&& Completion)
+	{
+		if (bClosing || !Ui || !Normalized.Output.IsValid() || Url.IsEmpty() || InstalledImages.Contains(Url))
+		{
+			if (!CacheKey.IsEmpty()) ReleaseNormalizedImage_RHI(CacheKey);
+			Completion(false, FIntPoint::ZeroValue, TEXT("AffineUI image renderer is unavailable."));
+			return false;
+		}
+		FInstalledImage Image;
+		Image.Normalized = MoveTemp(Normalized);
+		Image.CacheKey = CacheKey;
+		Image.DocumentEpoch = InDocumentEpoch;
+		ID3D11Texture2D* Imported = nullptr;
+		if (IsRHID3D11())
+		{
+			ID3D11DynamicRHI* Rhi = GetID3D11DynamicRHI();
+			ID3D11Resource* Native = Rhi ? Rhi->RHIGetResource(Image.Normalized.Output.GetReference()) : nullptr;
+			if (Native) (void)Native->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&Imported));
+		}
+		else if (IsRHID3D12())
+		{
+			if (!D3D12Bridge)
+			{
+				FString BridgeError;
+				D3D12Bridge = FNativeWebD3D12Bridge::Create(RenderedSize, BridgeError);
+				if (!D3D12Bridge)
+				{
+					ReleaseNormalizedImage_RHI(Image.CacheKey);
+					Completion(false, FIntPoint::ZeroValue, BridgeError);
+					return false;
+				}
+			}
+			FString BridgeError;
+			Image.AdditionalGpuBytes = D3D12Bridge->GetInputAllocationBytes_RHI(Image.Normalized.Size);
+			if (!Image.AdditionalGpuBytes ||
+				!ReserveImageGpuBytes_RHI(Image.CacheKey, Image.AdditionalGpuBytes, MaxGpuBytes))
+			{
+				Image.AdditionalGpuBytes = 0;
+				ReleaseNormalizedImage_RHI(Image.CacheKey);
+				Completion(false, FIntPoint::ZeroValue, TEXT("Native image GPU cache cannot admit the D3D12 transfer allocation."));
+				return false;
+			}
+		if (!D3D12Bridge->CreateInput_RHI(Image.Normalized.Size, Image.D3D12Input, BridgeError) ||
+			!Image.D3D12Input.IsValid())
+			{
+				ReleaseImageGpuBytes_RHI(Image.CacheKey, Image.AdditionalGpuBytes);
+				ReleaseNormalizedImage_RHI(Image.CacheKey);
+				Completion(false, FIntPoint::ZeroValue, BridgeError);
+				return false;
+			}
+			if (!D3D12Bridge->CopyInput_RHI(RHICmdList, Image.Normalized.Output,
+				Image.D3D12Input.ToSharedRef(), BridgeError))
+			{
+				if (!D3D12Bridge->IsInputRetired_RHI(*Image.D3D12Input))
+				{
+					MarkNormalizedImageRetiring_RHI(Image.CacheKey);
+					RetiredImages.Add(Url, MoveTemp(Image));
+					bRetirementPending.Store(true);
+				}
+				else
+				{
+					ReleaseImageGpuBytes_RHI(Image.CacheKey, Image.AdditionalGpuBytes);
+					ReleaseNormalizedImage_RHI(Image.CacheKey);
+				}
+				Completion(false, FIntPoint::ZeroValue, BridgeError);
+				return false;
+			}
+			Imported = D3D12Bridge->GetInputTexture(*Image.D3D12Input);
+		}
+		if (!Imported)
+		{
+			if (Image.D3D12Input.IsValid())
+			{
+				MarkNormalizedImageRetiring_RHI(Image.CacheKey);
+				RetiredImages.Add(Url, MoveTemp(Image));
+				bRetirementPending.Store(true);
+			}
+				else
+				{
+					ReleaseImageGpuBytes_RHI(Image.CacheKey, Image.AdditionalGpuBytes);
+					ReleaseNormalizedImage_RHI(Image.CacheKey);
+				}
+			Completion(false, FIntPoint::ZeroValue, TEXT("Could not import the normalized texture into AffineUI."));
+			return false;
+		}
+		const FTCHARToUTF8 Utf8Url(*Url);
+		const bool bRegistered = affineui_ui_register_external_image_d3d11(
+			Ui, Utf8Url.Get(), Imported, Image.Normalized.Size.X, Image.Normalized.Size.Y) != 0;
+		Imported->Release();
+		if (!bRegistered)
+		{
+			if (Image.D3D12Input.IsValid())
+			{
+			MarkNormalizedImageRetiring_RHI(Image.CacheKey);
+				RetiredImages.Add(Url, MoveTemp(Image));
+				bRetirementPending.Store(true);
+			}
+			else
+			{
+				ReleaseImageGpuBytes_RHI(Image.CacheKey, Image.AdditionalGpuBytes);
+				ReleaseNormalizedImage_RHI(Image.CacheKey);
+			}
+			Completion(false, FIntPoint::ZeroValue, TEXT("AffineUI rejected the external texture image."));
+			return false;
+		}
+		const FIntPoint InstalledSize = Image.Normalized.Size;
+		Image.bAffineRegistered = true;
+		InstalledImages.Add(Url, MoveTemp(Image));
+		Completion(true, InstalledSize, FString());
+		return true;
+	}
+
+	void RemoveImage(const FString& Url, uint64 InDocumentEpoch)
+	{
+		if (!Ui) return;
+		FInstalledImage* Image = InstalledImages.Find(Url);
+		if (!Image || Image->DocumentEpoch != InDocumentEpoch) return;
+		const FTCHARToUTF8 Utf8Url(*Url);
+		if (affineui_ui_unregister_external_image(Ui, Utf8Url.Get()) == 0) return;
+		RetiredImages.Add(Url, MoveTemp(*Image));
+		MarkNormalizedImageRetiring_RHI(RetiredImages.FindChecked(Url).CacheKey);
+		InstalledImages.Remove(Url);
+		bRetirementPending.Store(true);
 	}
 
 	bool DispatchInput(const FAffineUiInput& Input, FIntPoint TextureSize, uint64 InDocumentEpoch,
@@ -525,6 +752,42 @@ public:
 	}
 
 private:
+	void PollRetiredImages(ID3D11DeviceContext* Immediate)
+	{
+		for (auto It = RetiredImages.CreateIterator(); It; ++It)
+		{
+			FInstalledImage& Image = It.Value();
+			bool bRetired = false;
+			if (Image.D3D12Input.IsValid())
+			{
+				bRetired = D3D12Bridge.IsValid() && D3D12Bridge->IsInputRetired_RHI(*Image.D3D12Input);
+			}
+			else if (!Image.LastD3D11Marker.IsValid())
+			{
+				bRetired = true;
+			}
+			else if (Immediate)
+			{
+				const HRESULT QueryResult = Immediate->GetData(Image.LastD3D11Marker.GetReference(), nullptr, 0,
+					D3D11_ASYNC_GETDATA_DONOTFLUSH);
+				bRetired = QueryResult == S_OK;
+			}
+			if (!bRetired) continue;
+#if WITH_DEV_AUTOMATION_TESTS
+			// Keep the native wrappers and their GPU budget charge alive until the
+			// automation gate opens, even after the production marker has retired.
+			if (IsImageGpuRetirementTestHeld_RHI(Image.CacheKey)) continue;
+#endif
+
+			const FTCHARToUTF8 Utf8Url(*It.Key());
+			if (Ui && Image.bAffineRegistered) (void)affineui_ui_destroy_retired_external_image(Ui, Utf8Url.Get());
+			if (Image.AdditionalGpuBytes) ReleaseImageGpuBytes_RHI(Image.CacheKey, Image.AdditionalGpuBytes);
+			ReleaseNormalizedImage_RHI(Image.CacheKey, true);
+			It.RemoveCurrent();
+		}
+		if (!bClosing) bRetirementPending.Store(!RetiredImages.IsEmpty());
+	}
+
 	void RegisterClickHandler(uint64 NodeId)
 	{
 		if (RegisteredClickNodes.Contains(NodeId)) { return; }
@@ -603,6 +866,12 @@ private:
 	TSet<uint64> RegisteredClickNodes;
 	TArray<uint64> ClickedNodes;
 	TSharedPtr<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe> FontAssets;
+	TMap<FString, FInstalledImage> InstalledImages;
+	TMap<FString, FInstalledImage> RetiredImages;
+	TRefCountPtr<ID3D11Query> LastFrameMarker;
+	bool bClosing = false;
+	TAtomic<bool> bFinalized{false};
+	TAtomic<bool> bRetirementPending{false};
 	FIntPoint RenderedSize = FIntPoint::ZeroValue;
 	float RenderedDpiScale = 1.0f;
 	uint64 DocumentEpoch = 0;
@@ -611,8 +880,77 @@ private:
 #else
 class FAffineUiSurfaceRenderer::FState
 {
+public:
+	void AdvanceRetirement(FRHICommandListImmediate&) {}
+	bool IsFinalized() const { return true; }
+	bool HasPendingRetirement() const { return false; }
+	void PollRetirements(FRHICommandListImmediate&) {}
 };
 #endif
+
+TArray<TSharedPtr<FAffineUiSurfaceRenderer::FState, ESPMode::ThreadSafe>> FAffineUiSurfaceRenderer::RetiringStates;
+FTSTicker::FDelegateHandle FAffineUiSurfaceRenderer::RetirementQueueTicker;
+
+FAffineUiSurfaceRenderer::FAffineUiSurfaceRenderer()
+	: State(MakeShared<FState, ESPMode::ThreadSafe>())
+{
+}
+
+bool FAffineUiSurfaceRenderer::TickRetirementQueue(float)
+{
+	check(IsInGameThread());
+	for (int32 Index = RetiringStates.Num() - 1; Index >= 0; --Index)
+		if (!RetiringStates[Index].IsValid() || !RetiringStates[Index]->HasPendingRetirement()) RetiringStates.RemoveAtSwap(Index);
+	if (RetiringStates.IsEmpty())
+	{
+		RetirementQueueTicker.Reset();
+		return false;
+	}
+	const TArray<TSharedPtr<FState, ESPMode::ThreadSafe>> Snapshot = RetiringStates;
+	ENQUEUE_RENDER_COMMAND(AffineImageRetirementPoll)([Snapshot](FRHICommandListImmediate& RHICmdList)
+	{
+		RHICmdList.EnqueueLambda([Snapshot](FRHICommandListImmediate& Executing)
+		{
+			for (const TSharedPtr<FState, ESPMode::ThreadSafe>& State : Snapshot)
+				if (State) State->PollRetirements(Executing);
+		});
+	});
+	return true;
+}
+
+void FAffineUiSurfaceRenderer::ShutdownRetirementQueue()
+{
+	check(IsInGameThread());
+	if (RetirementQueueTicker.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(RetirementQueueTicker);
+		RetirementQueueTicker.Reset();
+	}
+	if (!RetiringStates.IsEmpty())
+	{
+		const TArray<TSharedPtr<FState, ESPMode::ThreadSafe>> Snapshot = RetiringStates;
+		ENQUEUE_RENDER_COMMAND(AffineImageRetirementFinalPoll)([Snapshot](FRHICommandListImmediate& RHICmdList)
+		{
+			RHICmdList.EnqueueLambda([Snapshot](FRHICommandListImmediate& Executing)
+			{
+				for (const TSharedPtr<FState, ESPMode::ThreadSafe>& State : Snapshot)
+					if (State) State->PollRetirements(Executing);
+			});
+		});
+	}
+	// Drain NativeWeb render/RHI lambdas before its module code can unload, even
+	// when the retirement queue is empty but unrelated queued work still exists.
+	FlushRenderingCommands();
+	for (int32 Index = RetiringStates.Num() - 1; Index >= 0; --Index)
+		if (!RetiringStates[Index].IsValid() || RetiringStates[Index]->IsFinalized()) RetiringStates.RemoveAtSwap(Index);
+	if (!RetiringStates.IsEmpty())
+	{
+		// Module shutdown may unload the code needed to poll unresolved GPU
+		// markers. Preserve those owners for process lifetime; their destructors
+		// must not release resources that the GPU may still reference.
+		(void)new TArray<TSharedPtr<FState, ESPMode::ThreadSafe>>(MoveTemp(RetiringStates));
+	}
+}
 
 void FAffineUiSurfaceRenderer::Draw(FTextureRenderTargetResource* Target, FIntPoint Size, float DpiScale,
                                     FColor ClearColor,
@@ -626,15 +964,16 @@ void FAffineUiSurfaceRenderer::Draw(FTextureRenderTargetResource* Target, FIntPo
 	       TEXT("Queuing RHI draw (target=%s size=%dx%d revision=%llu epoch=%llu)."),
 	       Target ? TEXT("valid") : TEXT("null"), Size.X, Size.Y,
 	       static_cast<unsigned long long>(Revision), static_cast<unsigned long long>(DocumentEpoch));
+	const TSharedPtr<FState, ESPMode::ThreadSafe> StateSnapshot = State;
 	ENQUEUE_RENDER_COMMAND(AffineSurfaceDraw)(
-		[this, Target, Size, DpiScale, ClearColor, Content = MoveTemp(Content), FontAssets = MoveTemp(FontAssets),
+		[StateSnapshot, Target, Size, DpiScale, ClearColor, Content = MoveTemp(Content), FontAssets = MoveTemp(FontAssets),
 			TextMutations = MoveTemp(TextMutations), Mutations = MoveTemp(Mutations), DocumentEpoch, Revision, Surface](
 		FRHICommandListImmediate& RHICmdList) mutable
 		{
 			FTextureRHIRef Output;
 			if (Target) { Output = Target->GetRenderTargetTexture(); }
 			RHICmdList.EnqueueLambda(
-				[this, Output, Size, DpiScale, ClearColor, Content = MoveTemp(Content), FontAssets = MoveTemp(
+				[StateSnapshot, Output, Size, DpiScale, ClearColor, Content = MoveTemp(Content), FontAssets = MoveTemp(
 						FontAssets),
 					TextMutations = MoveTemp(TextMutations), Mutations = MoveTemp(Mutations), DocumentEpoch, Revision,
 					Surface](FRHICommandListBase&)
@@ -652,8 +991,7 @@ void FAffineUiSurfaceRenderer::Draw(FTextureRenderTargetResource* Target, FIntPo
 					};
 					EAffineUiRenderResult Result = EAffineUiRenderResult::Failure;
 #if PLATFORM_WINDOWS
-					if (!State) { State = new FState(); }
-					Result = State->Render(Output, Size, DpiScale, ClearColor, Content, TextMutations,
+					Result = StateSnapshot->Render(Output, Size, DpiScale, ClearColor, Content, TextMutations,
 					                       Mutations, DocumentEpoch, FontAssets, MoveTemp(Completion));
 #endif
 					if (Result != EAffineUiRenderResult::Pending)
@@ -668,15 +1006,16 @@ void FAffineUiSurfaceRenderer::DispatchInput(FAffineUiInput Input, FIntPoint Tex
                                              TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface)
 {
 #if PLATFORM_WINDOWS
+	const TSharedPtr<FState, ESPMode::ThreadSafe> StateSnapshot = State;
 	UE_LOG(LogNativeWebInput, VeryVerbose, TEXT("Queuing input to RHI lane (kind=%d epoch=%llu)."),
 	       static_cast<int32>(Input.Kind), static_cast<unsigned long long>(DocumentEpoch));
 	ENQUEUE_RENDER_COMMAND(AffineSurfaceInput)(
-		[this, Input, TextureSize, DocumentEpoch, Surface](FRHICommandListImmediate& RHICmdList)
+		[StateSnapshot, Input, TextureSize, DocumentEpoch, Surface](FRHICommandListImmediate& RHICmdList)
 		{
-			RHICmdList.EnqueueLambda([this, Input, TextureSize, DocumentEpoch, Surface](FRHICommandListBase&)
+			RHICmdList.EnqueueLambda([StateSnapshot, Input, TextureSize, DocumentEpoch, Surface](FRHICommandListBase&)
 			{
 				TArray<uint64> Clicks;
-				const bool bNeedsRedraw = State && State->DispatchInput(Input, TextureSize, DocumentEpoch, Clicks);
+				const bool bNeedsRedraw = StateSnapshot && StateSnapshot->DispatchInput(Input, TextureSize, DocumentEpoch, Clicks);
 				if (Clicks.IsEmpty() && !bNeedsRedraw) { return; }
 				AsyncTask(ENamedThreads::GameThread,
 				          [Surface, DocumentEpoch, Clicks = MoveTemp(Clicks), bNeedsRedraw]() mutable
@@ -691,22 +1030,84 @@ void FAffineUiSurfaceRenderer::DispatchInput(FAffineUiInput Input, FIntPoint Tex
 #endif
 }
 
+void FAffineUiSurfaceRenderer::InstallImage(FString Url, FString CacheKey, FString GpuBudgetNamespace,
+	uint64 MaxGpuBytes, uint64 DocumentEpoch, FTextureRHIRef Source,
+	TFunction<void(bool, FIntPoint, const FString&)>&& Completion)
+{
+	const TSharedPtr<FState, ESPMode::ThreadSafe> StateSnapshot = State;
+	ENQUEUE_RENDER_COMMAND(AffineSurfaceInstallImage)(
+		[StateSnapshot, Url = MoveTemp(Url), CacheKey = MoveTemp(CacheKey), GpuBudgetNamespace = MoveTemp(GpuBudgetNamespace),
+			MaxGpuBytes, DocumentEpoch, Source = MoveTemp(Source),
+			Completion = MoveTemp(Completion)](FRHICommandListImmediate& RHICmdList) mutable
+		{
+			FNativeWebNormalizedImage Normalized;
+			FString Error;
+			if (!NormalizeImage_RenderThread(RHICmdList, Source, FIntPoint(4096, 4096), CacheKey,
+				GpuBudgetNamespace, MaxGpuBytes, Normalized, Error))
+			{
+				AsyncTask(ENamedThreads::GameThread,
+					[Completion = MoveTemp(Completion), Error = MoveTemp(Error)]() mutable
+					{
+						Completion(false, FIntPoint::ZeroValue, Error);
+					});
+				return;
+			}
+			RHICmdList.EnqueueLambda(
+				[StateSnapshot, Url = MoveTemp(Url), CacheKey = MoveTemp(CacheKey),
+					GpuBudgetNamespace = MoveTemp(GpuBudgetNamespace), MaxGpuBytes, DocumentEpoch, Normalized = MoveTemp(Normalized),
+					Completion = MoveTemp(Completion)](FRHICommandList& Executing) mutable
+				{
+					const bool bInstalled = StateSnapshot && StateSnapshot->InstallImage(Executing, Url, CacheKey,
+						MaxGpuBytes, DocumentEpoch, MoveTemp(Normalized),
+						[Completion = MoveTemp(Completion)](bool bSuccess, FIntPoint Size, const FString& Message) mutable
+						{
+							AsyncTask(ENamedThreads::GameThread,
+								[Completion = MoveTemp(Completion), bSuccess, Size, Message]() mutable
+								{
+									Completion(bSuccess, Size, Message);
+								});
+						});
+					(void)bInstalled;
+				});
+		});
+}
+
+void FAffineUiSurfaceRenderer::RemoveImage(FString Url, uint64 DocumentEpoch)
+{
+	const TSharedPtr<FState, ESPMode::ThreadSafe> StateSnapshot = State;
+	if (StateSnapshot.IsValid())
+	{
+		StateSnapshot->MarkRetirementPending();
+		RetiringStates.AddUnique(StateSnapshot);
+		if (!RetirementQueueTicker.IsValid())
+			RetirementQueueTicker = FTSTicker::GetCoreTicker().AddTicker(
+				FTickerDelegate::CreateStatic(&FAffineUiSurfaceRenderer::TickRetirementQueue), 0.016f);
+	}
+	ENQUEUE_RENDER_COMMAND(AffineSurfaceRemoveImage)(
+		[StateSnapshot, Url = MoveTemp(Url), DocumentEpoch](FRHICommandListImmediate& RHICmdList)
+		{
+			RHICmdList.EnqueueLambda([StateSnapshot, Url, DocumentEpoch](FRHICommandListBase&)
+			{
+				if (StateSnapshot) StateSnapshot->RemoveImage(Url, DocumentEpoch);
+			});
+		});
+}
+
 void FAffineUiSurfaceRenderer::Shutdown()
 {
-	UE_LOG(LogNativeWebRender, Verbose, TEXT("Waiting for RHI renderer shutdown."));
-	ENQUEUE_RENDER_COMMAND(AffineSurfaceShutdown)([this](FRHICommandListImmediate& RHICmdList)
+	if (!State.IsValid()) return;
+	UE_LOG(LogNativeWebRender, Verbose, TEXT("Starting asynchronous RHI image retirement."));
+	State->MarkRetirementPending();
+	RetiringStates.Add(State);
+	if (!RetirementQueueTicker.IsValid())
+		RetirementQueueTicker = FTSTicker::GetCoreTicker().AddTicker(
+			FTickerDelegate::CreateStatic(&FAffineUiSurfaceRenderer::TickRetirementQueue), 0.016f);
+	const TSharedPtr<FState, ESPMode::ThreadSafe> RetiringState = MoveTemp(State);
+	ENQUEUE_RENDER_COMMAND(AffineSurfaceShutdown)([RetiringState](FRHICommandListImmediate& RHICmdList)
 	{
-		RHICmdList.EnqueueLambda([this](FRHICommandListBase&)
+		RHICmdList.EnqueueLambda([RetiringState](FRHICommandListImmediate& Executing)
 		{
-			// The RHI command stream owns the submission ordering. D3D12 transfer
-			// slots retain their native resources through their UE GPU fences; no
-			// process-wide GPU idle is required during close.
-			delete State;
-			State = nullptr;
+			if (RetiringState) RetiringState->AdvanceRetirement(Executing);
 		});
 	});
-	FRenderCommandFence Fence;
-	Fence.BeginFence(FRenderCommandFence::ESyncDepth::RHIThread);
-	Fence.Wait();
-	UE_LOG(LogNativeWebRender, Verbose, TEXT("RHI renderer shutdown completed."));
 }

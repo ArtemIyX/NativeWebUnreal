@@ -27,6 +27,7 @@ namespace
 	{
 		return FCString::Strlen(*Text) != Text.Len();
 	}
+
 }
 
 class FAffineUiSurface::FImpl
@@ -115,10 +116,10 @@ TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> FAffineUiSurface::Create(
 		UE_LOG(LogNativeWebAffineUi, Error, TEXT("Surface creation rejected: %s"), *OutError);
 		return nullptr;
 	}
-	if (!IsValidDescriptor(Desc.PixelSize, Desc.DpiScale) || Desc.ClearColor.A != 255 ||
+	if (!IsValidDescriptor(Desc.PixelSize, Desc.DpiScale) ||
 		ContainsEmbeddedNull(Desc.Content.Html) || ContainsEmbeddedNull(Desc.Content.Css))
 	{
-		OutError = TEXT("Invalid surface size, DPI scale, clear color alpha, or embedded null in content.");
+		OutError = TEXT("Invalid surface size, DPI scale, or embedded null in content.");
 		UE_LOG(LogNativeWebAffineUi, Error, TEXT("Surface creation rejected: %s"), *OutError);
 		return nullptr;
 	}
@@ -467,7 +468,8 @@ void FAffineUiSurface::StartPending()
 	Impl->Pending.Reset(Target);
 	Target->bNeedsTwoCopies = false;
 	Target->bAutoGenerateMips = false;
-	Target->ClearColor = FLinearColor::FromSRGBColor(Impl->Desired.ClearColor);
+	Target->ClearColor = FLinearColor::FromSRGBColor(
+		NativeWebSurface::PremultiplyDisplayColor(Impl->Desired.ClearColor));
 	Target->InitCustomFormat(Impl->Desired.PixelSize.X, Impl->Desired.PixelSize.Y, PF_B8G8R8A8, false);
 	Target->UpdateResourceImmediate(true);
 	Impl->PendingRevision = Impl->DesiredRevision;

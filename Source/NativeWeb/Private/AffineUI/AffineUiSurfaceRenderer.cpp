@@ -57,7 +57,6 @@ namespace
 	// AffineUI's C log sink is process-global; this surface serializes all use on the RHI lane.
 	bool bAffineError = false;
 
-
 	void AffineLog(affineui_log_level Level, const char* Message, void*)
 	{
 		if (Level == AFFINEUI_LOG_ERROR)
@@ -472,7 +471,9 @@ public:
 			// Remember attempts so a stale id does not generate work on every redraw.
 			AppliedText.Add(Mutation.ElementId, Mutation.Text);
 		}
-		affineui_ui_set_clear_color(Ui, ClearColor.R, ClearColor.G, ClearColor.B, ClearColor.A);
+		const FColor AssociatedClearColor = NativeWebSurface::PremultiplyDisplayColor(ClearColor);
+		affineui_ui_set_clear_color(Ui, AssociatedClearColor.R, AssociatedClearColor.G,
+		                            AssociatedClearColor.B, AssociatedClearColor.A);
 		affineui_frame_target Target{};
 		Target.width = Size.X;
 		Target.height = Size.Y;

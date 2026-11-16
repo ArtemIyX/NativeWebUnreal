@@ -14,9 +14,9 @@ configured by a NativeWeb view.
 - The renderer supports Win64 with either the D3D11 or D3D12 RHI. D3D11 uses
   Unreal's native D3D11 device; D3D12 uses a same-adapter private D3D11
   producer and a NativeWeb-owned shared BGRA8 transfer texture.
-- AffineUI currently allows one live surface per process. Creating another
-  view while one is active fails with an error; close the first view before
-  creating a replacement.
+- Each local-player subsystem owns independent views and surfaces. Names are
+  unique within that subsystem and can match across local players and PIE
+  windows.
 - Create, evaluate, tick, and close views on the game thread. AffineUI surface
   and producer submission work is performed on the RHI lane; D3D12
   producer-fence polling is performed asynchronously before the UE copy.
@@ -140,8 +140,8 @@ to the project's `Content` directory.
   the owning local-player subsystem. Multiple named views can own independent
   AffineUI surfaces at the same time. Creation fails for an empty/duplicate
   name, invalid content path/options, or unsupported renderer.
-- The default `PresentationMode` is `GpuViewport`. It samples the existing
-  opaque output texture in a UE 5.7 scene-view extension after scene rendering
+- The default `PresentationMode` is `GpuViewport`. It composites the existing
+  alpha-bearing output texture in a UE 5.7 scene-view extension after scene rendering
   and upscaling. Slate/UMG is composed later and can cover the GPU view; GPU
   presentation has no arbitrary Slate z-order. This ordering is source-verified
   against the UE 5.7 `PostRenderView_RenderThread` call site and still needs
@@ -183,14 +183,18 @@ to the project's `Content` directory.
   releases view-owned focus/capture, invalidates callbacks, and tears down the
   runtime. `DestroyView` additionally removes the view from the subsystem map.
 
-The GPU path currently supports Win64, D3D11 or D3D12, one live AffineUI surface, and
+The GPU path currently supports Win64, D3D11 or D3D12, independent local-player surfaces, and
 non-stereo viewports whose scene target is PF_B8G8R8A8, PF_R8G8B8A8, or
-PF_A2B10G10R10. The supported output device is opaque `SDR_sRGB` with the
-sRGB-D65 gamut. AffineUI creates a single-sample BGRA8 sRGB texture: its
-shader-resource view decodes RGB to linear, and the GPU presenter explicitly
-encodes RGB back to sRGB for UE's non-sRGB scene attachment. Alpha is forced to
-1.0; the surface rejects non-opaque clear colors, and transparent presentation
-is unsupported. The scene target must be a single-sample 2D renderable/shader
+PF_A2B10G10R10. The supported output device is `SDR_sRGB` with the sRGB-D65
+gamut. AffineUI creates a single-sample BGRA8 sRGB-tagged texture containing
+associated display-encoded RGB and alpha. The default clear is transparent;
+custom clears may be opaque or partially transparent. Slate uses premultiplied
+source-over, and the GPU presenter composites over scene color while preserving
+scene alpha. Non-sRGB SDR attachments use a separate scene-rectangle copy and
+shader-side sRGB conversion. HUD views belong to their local player and retain
+their document and JavaScript state through world travel; the presenter is
+reattached when that player's new viewport is ready. The scene target must be a
+single-sample 2D renderable/shader
 resource, and the view rectangle must fit within it.
 
 HDR, Rec.709, explicit-gamma and other output-device configurations, invalid
@@ -236,6 +240,30 @@ with both `-dx11` and `-dx12`:
    `/Plugin/NativeWeb/Private/NativeWebViewport.usf` is available at startup.
    Repeat create/switch/destroy and shutdown cycles and inspect render/RHI logs
    for stale textures, device warnings, or use-after-free.
+
+### Transparent HUD and travel smoke fixture
+
+VueExample includes an opt-in local-player fixture. Launch PIE, standalone, or
+a packaged game with `-NativeWebHudSmoke` to create the same named view in each
+local player's own subsystem. The panel has a partially transparent blue fill,
+a process/world/player label, a JavaScript startup counter, and a click counter.
+GPU viewport is selected with fallback disabled. Add
+`-NativeWebHudSmokeSlate` to exercise Slate, or
+`-NativeWebHudSmokeOpaque` to start with an opaque surface clear.
+
+In two-window PIE, use two clients and try both Run Under One Process settings.
+Confirm each window has its own label and click count, hide/close one view, and
+check that the other still receives input. For level travel, open
+`/Engine/Maps/Entry` and then `/Game/Maps/MAP_Demo`; check the per-world
+`NATIVEWEB_HUD_SMOKE_READY` log entries and confirm the existing view does not
+repeat its JavaScript startup counter. For network travel, start a listen
+server with the HUD flag, run `servertravel /Game/Maps/MAP_Demo?listen`, then
+connect a standalone client started with the HUD flag using
+`open 127.0.0.1:7777`. In UE 5.7 same-process PIE, enable
+`net.AllowPIESeamlessTravel 1` before testing seamless travel. Record process
+IDs, world names/pointers, local-player and view pointers, active presentation,
+and whether each window receives clicks. This fixture is opt-in and does not
+retain world references or run in editor-only worlds.
 
 The focused automation group is `Automation RunTests NativeWeb.Presentation`.
 The GPU draw order, cooked shader loading, input capture, cross-RHI transfer,

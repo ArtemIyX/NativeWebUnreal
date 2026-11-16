@@ -13,6 +13,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAffineUiSurfaceLifecycleTest,
 bool FAffineUiSurfaceLifecycleTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
+	TestEqual(TEXT("default surface clear is fully transparent"), FAffineUiSurfaceDesc().ClearColor,
+		FColor::Transparent);
+	TestEqual(TEXT("partial-alpha clear is associated in display space"),
+		NativeWebSurface::PremultiplyDisplayColor(FColor(200, 100, 50, 128)), FColor(100, 50, 25, 128));
+	TestEqual(TEXT("zero-alpha clear canonicalizes all color channels"),
+		NativeWebSurface::PremultiplyDisplayColor(FColor(200, 100, 50, 0)), FColor::Transparent);
 	if (!GDynamicRHI || GDynamicRHI->GetInterfaceType() != ERHIInterfaceType::D3D11)
 	{
 		AddWarning(TEXT("This test requires an isolated D3D11 editor session (-dx11)."));
@@ -27,6 +33,7 @@ bool FAffineUiSurfaceLifecycleTest::RunTest(const FString& Parameters)
 	FString OtherError;
 	FAffineUiSurfaceDesc OtherDesc = Desc;
 	OtherDesc.Content.Html = TEXT("<html><body><p>Independent surface</p></body></html>");
+	OtherDesc.ClearColor = FColor(16, 48, 96, 255);
 	TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Other = FAffineUiSurface::Create(OtherDesc, OtherError);
 	if (!TestTrue(TEXT("A second surface can be created concurrently"), Other.IsValid()))
 	{

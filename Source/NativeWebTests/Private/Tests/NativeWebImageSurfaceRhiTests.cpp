@@ -56,7 +56,7 @@ namespace
 		bool bReadbackComplete = false;
 		bool bReadbackPollQueued = false;
 		bool bReadbackQueued = false;
-		FColor ReadbackSamples[5] = {};
+		FColor ReadbackSamples[6] = {};
 		FString ReadbackError;
 		double StartSeconds = 0.0;
 	};
@@ -247,6 +247,7 @@ namespace
 							State->ReadbackSamples[2] = Pixels[2 * RowPitchPixels + 2];
 							State->ReadbackSamples[3] = Pixels[0 * RowPitchPixels + 8];
 							State->ReadbackSamples[4] = Pixels[0 * RowPitchPixels + 10];
+							State->ReadbackSamples[5] = Pixels[6 * RowPitchPixels + 6];
 						}
 						if (Pixels) Readback->Unlock();
 						FScopeLock Lock(&State->ReadbackMutex);
@@ -258,7 +259,7 @@ namespace
 			}
 			if (bReadbackComplete)
 			{
-				FColor Samples[5] = {};
+				FColor Samples[6] = {};
 				FString ReadbackError;
 				{
 					FScopeLock Lock(&State->ReadbackMutex);
@@ -287,6 +288,15 @@ namespace
 						bCorrectIntrinsicChannels && Samples[4].R < 20 && Samples[4].G < 20 && Samples[4].B < 20);
 					State->Test->TestEqual(*FString::Printf(TEXT("%s preserves opaque alpha"), *SurfaceLabel),
 						Samples[0].A, static_cast<uint8>(255));
+					State->Test->TestEqual(*FString::Printf(TEXT("%s reads the configured clear alpha"), *SurfaceLabel),
+						Samples[1].A, static_cast<uint8>(bRedSurface ? 0 : 255));
+					const int32 ExpectedHalfAlpha = bRedSurface ? 128 : 255;
+					State->Test->TestTrue(*FString::Printf(TEXT("%s stores half-white source-over RGB near 128"), *SurfaceLabel),
+						FMath::Abs(static_cast<int32>(Samples[5].R) - 128) <= 12 &&
+						FMath::Abs(static_cast<int32>(Samples[5].G) - 128) <= 12 &&
+						FMath::Abs(static_cast<int32>(Samples[5].B) - 128) <= 12);
+					State->Test->TestTrue(*FString::Printf(TEXT("%s stores expected half-white source-over alpha"), *SurfaceLabel),
+						FMath::Abs(static_cast<int32>(Samples[5].A) - ExpectedHalfAlpha) <= 12);
 				}
 				if (State->SurfaceIndex == 0)
 				{
@@ -436,14 +446,16 @@ bool FNativeWebImageSurfaceRhiTest::RunTest(const FString&)
 
 	const FString SharedUrl = TEXT("nativeweb-image://1/1");
 	const FString LayeredHtml = FString::Printf(
-		TEXT("<html><body style='margin:0;background:#000'><div style='position:absolute;left:0;top:0;width:3px;height:3px;overflow:hidden'>"
+		TEXT("<html><body style='margin:0;background:transparent'><div style='position:absolute;left:0;top:0;width:3px;height:3px;overflow:hidden'>"
 		     "<img src='%s' style='display:block;width:5px;height:5px'><div style='position:absolute;left:2px;top:2px;width:1px;height:1px;background:#00ff00'></div></div>"
-		     "<img src='%s' style='position:absolute;left:8px;top:0px'><div id='motion' style='position:absolute;left:12px;top:12px;width:2px;height:2px;background:#fff'></div></body></html>"),
+		     "<img src='%s' style='position:absolute;left:8px;top:0px'><div id='motion' style='position:absolute;left:12px;top:12px;width:2px;height:2px;background:#fff'></div>"
+		     "<div style='position:absolute;left:6px;top:6px;width:2px;height:2px;background:rgba(255,255,255,0.5)'></div></body></html>"),
 		*SharedUrl, *SharedUrl);
 	FAffineUiSurfaceDesc Desc;
 	Desc.PixelSize = FIntPoint(16, 16);
 	Desc.Content.Html = LayeredHtml;
 	FAffineUiSurfaceDesc OtherDesc = Desc;
+	OtherDesc.ClearColor = FColor::Black;
 	OtherDesc.Content.Css = TEXT(
 		"#motion{animation:nativeweb-finite-move 0.4s linear 1 forwards}"
 		"@keyframes nativeweb-finite-move{from{transform:translateX(0px)}to{transform:translateX(2px)}}");

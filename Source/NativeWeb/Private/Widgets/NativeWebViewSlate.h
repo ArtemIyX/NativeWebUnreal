@@ -18,7 +18,7 @@
 class UNativeWebView;
 class ULocalPlayer;
 class UTextureRenderTarget2D;
-class SImage;
+class SNativeWebPremultipliedImage;
 
 class SNativeWebView final : public SCompoundWidget
 {
@@ -303,8 +303,10 @@ private:
 	TWeakObjectPtr<ULocalPlayer> Player;
 	TWeakPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface;
 	TStrongObjectPtr<UTextureRenderTarget2D> Target;
-	TSharedPtr<SImage> Image;
+	TSharedPtr<SNativeWebPremultipliedImage> Image;
 	FSlateBrush Brush;
+	int32 CapturedUserIndex = INDEX_NONE;
+	int32 CapturedPointerIndex = INDEX_NONE;
 	bool bVisible = true;
 	bool bPointerPressed = false;
 };

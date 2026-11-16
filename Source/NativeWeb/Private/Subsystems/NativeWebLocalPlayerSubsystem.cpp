@@ -2,7 +2,10 @@
 
 #include "Assets/NativeWebAppSource.h"
 #include "Engine/AssetManager.h"
+#include "Engine/LocalPlayer.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/StreamableManager.h"
+#include "Engine/World.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "NativeWeb.h"
@@ -60,6 +63,8 @@ void UNativeWebLocalPlayerSubsystem::Initialize(FSubsystemCollectionBase& Collec
 	bShuttingDown = false;
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(
 		FTickerDelegate::CreateUObject(this, &UNativeWebLocalPlayerSubsystem::Tick));
+	WorldTearDownHandle = FWorldDelegates::OnWorldBeginTearDown.AddUObject(
+		this, &UNativeWebLocalPlayerSubsystem::HandleOwningWorldBeginTearDown);
 	UE_LOG(LogNativeWebSubsystem, Display, TEXT("NativeWeb local-player subsystem initialized; tick handle valid=%s."),
 	       TickHandle.IsValid() ? TEXT("true") : TEXT("false"));
 }
@@ -68,6 +73,11 @@ void UNativeWebLocalPlayerSubsystem::Deinitialize()
 {
 	check(IsInGameThread());
 	bShuttingDown = true;
+	if (WorldTearDownHandle.IsValid())
+	{
+		FWorldDelegates::OnWorldBeginTearDown.Remove(WorldTearDownHandle);
+		WorldTearDownHandle.Reset();
+	}
 	TMap<FName, TSharedPtr<FPendingAppRequest>> DetachedRequests = MoveTemp(PendingAppRequests);
 	PendingAppRequests.Reset();
 	ReservedAppRequests.Reset();
@@ -600,7 +610,7 @@ bool UNativeWebLocalPlayerSubsystem::ValidateViewOptions(
 	const bool bValidSurface = SurfaceConfig.PixelSize.X > 0 && SurfaceConfig.PixelSize.Y > 0 &&
 		SurfaceConfig.PixelSize.X <= 4096 && SurfaceConfig.PixelSize.Y <= 4096 &&
 		FMath::IsFinite(SurfaceConfig.DpiScale) && SurfaceConfig.DpiScale > 0.0f &&
-		SurfaceConfig.DpiScale <= 8.0f && SurfaceConfig.ClearColor.A == 255;
+		SurfaceConfig.DpiScale <= 8.0f;
 	const bool bValidPresentation = PresentationConfig.PresentationMode == ENativeWebPresentationMode::GpuViewport ||
 		PresentationConfig.PresentationMode == ENativeWebPresentationMode::Slate ||
 		PresentationConfig.PresentationMode == ENativeWebPresentationMode::None;
@@ -652,6 +662,24 @@ bool UNativeWebLocalPlayerSubsystem::Tick(float)
 	TArray<TObjectPtr<UNativeWebView>> Snapshot;
 	Views.GenerateValueArray(Snapshot);
 	for (const TObjectPtr<UNativeWebView>& View : Snapshot)
-		if (View && !View->IsClosed()) View->Tick();
+		if (View && !View->IsClosed())
+		{
+			View->RefreshPresentationForOwner();
+			View->Tick();
+		}
 	return true;
+}
+
+void UNativeWebLocalPlayerSubsystem::HandleOwningWorldBeginTearDown(UWorld* World)
+{
+	check(IsInGameThread());
+	if (bShuttingDown || !World) return;
+	ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	if (!IsValid(LocalPlayer) || (LocalPlayer->GetWorld() != World &&
+		(!LocalPlayer->ViewportClient || LocalPlayer->ViewportClient->GetWorld() != World))) return;
+
+	TArray<TObjectPtr<UNativeWebView>> Snapshot;
+	Views.GenerateValueArray(Snapshot);
+	for (const TObjectPtr<UNativeWebView>& View : Snapshot)
+		if (View && !View->IsClosed()) View->SuspendPresentationForWorld(World);
 }

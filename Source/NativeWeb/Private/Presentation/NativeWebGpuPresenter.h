@@ -16,7 +16,7 @@ class UTextureRenderTarget2D;
 class FNativeWebGpuPresenter final
 {
 public:
-	/** @brief Returns whether the scene format/output device has the supported opaque SDR contract. */
+	/** @brief Returns whether the scene format/output device has the supported SDR source-over contract. */
 	static bool IsSupportedSceneTarget(EPixelFormat SceneFormat, EDisplayOutputFormat OutputFormat,
 	                                  EDisplayColorGamut ColorGamut)
 	{

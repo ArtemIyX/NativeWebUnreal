@@ -5,6 +5,7 @@
 #include "AffineUI/AffineUiSurface.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/GameViewportClient.h"
+#include "Engine/World.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "NativeWeb.h"
@@ -12,6 +13,7 @@
 #include "Subsystems/NativeWebLocalPlayerSubsystem.h"
 #include "Subsystems/NativeWebImageSubsystem.h"
 #include "Widgets/NativeWebViewSlate.h"
+#include "Widgets/SViewport.h"
 #include "NativeWebMessageDelivery.h"
 
 namespace
@@ -166,6 +168,9 @@ bool UNativeWebView::Show()
 		return false;
 	}
 	bVisible = true;
+	bWantsPresentation = true;
+	bPresentationBindingAttempted = false;
+	RefreshPresentationForOwner();
 	if (bPresentationPending && PendingPresentationMode == RequestedPresentationMode)
 	{
 		if (Attachment && ActivePresentationMode == ENativeWebPresentationMode::Slate) Attachment->SetVisible(true);
@@ -175,13 +180,7 @@ bool UNativeWebView::Show()
 		       *ViewName.ToString());
 		return true;
 	}
-	if (ActivePresentationMode == ENativeWebPresentationMode::None ||
-		(ActivePresentationMode != RequestedPresentationMode && !bPresentationFallbackActive))
-	{
-		FNativeWebError PresenterError;
-		StartRequestedPresenter(PresenterError);
-		if (bClosed || !Surface) return false;
-	}
+	if (bClosed || !Surface) return false;
 	if (Attachment) Attachment->SetVisible(true);
 	if (GpuPresenter && ActivePresentationMode == ENativeWebPresentationMode::GpuViewport) GpuPresenter->
 		SetVisible(true);
@@ -222,7 +221,15 @@ bool UNativeWebView::AttachToPlayerViewport(int32 ZOrder)
 	RequestedPresentationMode = ENativeWebPresentationMode::Slate;
 	bAllowPresentationFallback = false;
 	SlateZOrder = ZOrder;
-	if (ActivePresentationMode == ENativeWebPresentationMode::Slate && Attachment) return true;
+	bWantsPresentation = true;
+	bPresentationBindingAttempted = false;
+	if (ActivePresentationMode == ENativeWebPresentationMode::Slate && Attachment &&
+		Attachment->GetParentWidget().IsValid()) return true;
+	if (ActivePresentationMode == ENativeWebPresentationMode::Slate && Attachment)
+	{
+		CleanupPresentationBinding();
+		bPresentationBindingAttempted = false;
+	}
 	FNativeWebError ErrorValue;
 	if (!StartSlatePresenter(ErrorValue)) return false;
 	if (GpuPresenter)
@@ -253,6 +260,7 @@ bool UNativeWebView::StartSlatePresenter(FNativeWebError& OutError)
 		       *ViewName.ToString());
 		return false;
 	}
+	RecordOwnerBinding(Player->GetWorld(), Viewport, Viewport->GetGameViewportWidget(), Viewport->Viewport);
 	TSharedRef<SNativeWebView> Widget = SNew(SNativeWebView).View(this).Player(Player).Surface(Surface);
 	Attachment = Widget;
 	Widget->SetVisible(false);
@@ -275,9 +283,8 @@ void UNativeWebView::RemoveSlatePresenter()
 {
 	if (!Attachment) return;
 	Attachment->SetVisible(false);
-	if (ULocalPlayer* Player = OwningPlayer.Get())
-		if (UGameViewportClient* Viewport = Player->ViewportClient)
-			Viewport->RemoveViewportWidgetContent(Attachment.ToSharedRef());
+	if (UGameViewportClient* Viewport = BoundViewportClient.Get())
+		Viewport->RemoveViewportWidgetContent(Attachment.ToSharedRef());
 	Attachment.Reset();
 }
 
@@ -307,8 +314,18 @@ bool UNativeWebView::SetPresentationMode(ENativeWebPresentationMode Mode, bool b
 		bPresentationPending = false;
 		PendingPresentationMode = ENativeWebPresentationMode::None;
 	}
+	if (Mode == ENativeWebPresentationMode::None)
+	{
+		RequestedPresentationMode = Mode;
+		bAllowPresentationFallback = bAllowSlateFallback;
+		DetachPresentation();
+		OutError = {};
+		return true;
+	}
 	RequestedPresentationMode = Mode;
+	bPresentationBindingAttempted = false;
 	bAllowPresentationFallback = bAllowSlateFallback;
+	if (bVisible) bWantsPresentation = true;
 	PresentationFailureReason.Reset();
 	bPresentationFallbackActive = false;
 	UE_LOG(LogNativeWebViewport, Display, TEXT("View '%s' presentation mode requested: %s (fallback=%s)."),
@@ -330,25 +347,33 @@ bool UNativeWebView::AttachPresentation()
 	check(IsInGameThread());
 	if (bClosed || !Surface) return false;
 	bVisible = true;
+	bWantsPresentation = true;
+	bPresentationBindingAttempted = false;
 	if (RequestedPresentationMode == ENativeWebPresentationMode::None) return true;
-	if (bPresentationPending) return true;
-	FNativeWebError OutError;
-	const bool bAttached = StartRequestedPresenter(OutError);
+	RefreshPresentationForOwner();
 	if (bClosed || !Surface) return false;
 	if (Attachment) Attachment->SetVisible(true);
 	if (GpuPresenter && ActivePresentationMode == ENativeWebPresentationMode::GpuViewport) GpuPresenter->
 		SetVisible(true);
-	return bAttached || bPresentationPending || ActivePresentationMode != ENativeWebPresentationMode::None;
+	if (RequestedPresentationMode == ENativeWebPresentationMode::None || bPresentationPending ||
+		ActivePresentationMode != ENativeWebPresentationMode::None) return true;
+	if (bPresentationBindingAttempted) return false;
+	// The owner's viewport may not exist yet (for example, during travel). That is
+	// an accepted deferred attach; the subsystem will retry when the binding is ready.
+	return true;
 }
 
 bool UNativeWebView::StartRequestedPresenter(FNativeWebError& OutError)
 {
 	check(IsInGameThread());
-	if (RequestedPresentationMode == ENativeWebPresentationMode::None)
-	{
-		DetachPresentation();
-		return true;
-	}
+	UWorld* OwnerWorld = nullptr;
+	UGameViewportClient* ViewportClient = nullptr;
+	TSharedPtr<SViewport> ViewportWidget;
+	FViewport* NativeViewport = nullptr;
+	if (!IsOwnerBindingReady(OwnerWorld, ViewportClient, ViewportWidget, NativeViewport)) return true;
+	RecordOwnerBinding(OwnerWorld, ViewportClient, ViewportWidget, NativeViewport);
+	bPresentationBindingAttempted = true;
+	if (RequestedPresentationMode == ENativeWebPresentationMode::None) return true;
 	if (RequestedPresentationMode == ENativeWebPresentationMode::Slate)
 	{
 		if (!StartSlatePresenter(OutError))
@@ -475,6 +500,14 @@ void UNativeWebView::SetPresentationFailure(const FString& Reason, bool bTryFall
 void UNativeWebView::DetachPresentation()
 {
 	check(IsInGameThread());
+	bWantsPresentation = false;
+	bPresentationBindingAttempted = true;
+	CleanupPresentationBinding();
+	PresentationChanged.Broadcast(RequestedPresentationMode, ActivePresentationMode, false, PresentationFailureReason);
+}
+
+void UNativeWebView::CleanupPresentationBinding()
+{
 	if (GpuPresenter)
 	{
 		GpuPresenter->Shutdown();
@@ -485,7 +518,81 @@ void UNativeWebView::DetachPresentation()
 	bPresentationPending = false;
 	PendingPresentationMode = ENativeWebPresentationMode::None;
 	bPresentationFallbackActive = false;
-	PresentationChanged.Broadcast(RequestedPresentationMode, ActivePresentationMode, false, PresentationFailureReason);
+	BoundWorld.Reset();
+	BoundViewportClient.Reset();
+	BoundViewportWidget.Reset();
+	BoundNativeViewport = nullptr;
+}
+
+bool UNativeWebView::IsOwnerBindingReady(UWorld*& OutWorld, UGameViewportClient*& OutViewportClient,
+	TSharedPtr<SViewport>& OutViewportWidget, FViewport*& OutNativeViewport) const
+{
+	OutWorld = nullptr;
+	OutViewportClient = nullptr;
+	OutViewportWidget.Reset();
+	OutNativeViewport = nullptr;
+	ULocalPlayer* Player = OwningPlayer.Get();
+	if (!IsValid(Player)) return false;
+	OutWorld = Player->GetWorld();
+	if (!IsValid(OutWorld) || TearingDownWorld.Get() == OutWorld) return false;
+	OutViewportClient = Player->ViewportClient;
+	if (!IsValid(OutViewportClient) || OutViewportClient->GetWorld() != OutWorld) return false;
+	if (!Player->GetPlayerController(OutWorld)) return false;
+	OutNativeViewport = OutViewportClient->Viewport;
+	OutViewportWidget = OutViewportClient->GetGameViewportWidget();
+	return OutNativeViewport != nullptr && OutViewportWidget.IsValid();
+}
+
+void UNativeWebView::RecordOwnerBinding(UWorld* World, UGameViewportClient* ViewportClient,
+	const TSharedPtr<SViewport>& ViewportWidget, FViewport* NativeViewport)
+{
+	BoundWorld = World;
+	BoundViewportClient = ViewportClient;
+	BoundViewportWidget = ViewportWidget;
+	BoundNativeViewport = NativeViewport;
+}
+
+void UNativeWebView::SuspendPresentationForWorld(UWorld* World)
+{
+	if (!World || BoundWorld.Get() != World) return;
+	TearingDownWorld = World;
+	CleanupPresentationBinding();
+	bPresentationBindingAttempted = false;
+}
+
+void UNativeWebView::RefreshPresentationForOwner()
+{
+	check(IsInGameThread());
+	if (bClosed) return;
+	UWorld* OwnerWorld = nullptr;
+	UGameViewportClient* ViewportClient = nullptr;
+	TSharedPtr<SViewport> ViewportWidget;
+	FViewport* NativeViewport = nullptr;
+	const bool bReady = IsOwnerBindingReady(OwnerWorld, ViewportClient, ViewportWidget, NativeViewport);
+	if (OwnerWorld && TearingDownWorld.IsValid() && TearingDownWorld.Get() != OwnerWorld) TearingDownWorld.Reset();
+	const bool bHadBinding = BoundWorld.IsValid() || BoundViewportClient.IsValid() || BoundViewportWidget.IsValid() ||
+		BoundNativeViewport != nullptr;
+	const bool bSlateAttachmentLost = ActivePresentationMode == ENativeWebPresentationMode::Slate && Attachment &&
+		!Attachment->GetParentWidget().IsValid();
+	const bool bBindingChanged = bHadBinding && (!bReady || BoundWorld.Get() != OwnerWorld ||
+		BoundViewportClient.Get() != ViewportClient || BoundViewportWidget.Pin() != ViewportWidget ||
+		BoundNativeViewport != NativeViewport || bSlateAttachmentLost);
+	if (bBindingChanged)
+	{
+		CleanupPresentationBinding();
+		bPresentationBindingAttempted = false;
+	}
+	if (!bReady)
+	{
+		if (bHadBinding && !bBindingChanged) CleanupPresentationBinding();
+		bPresentationBindingAttempted = false;
+		return;
+	}
+	if (!bWantsPresentation || !bVisible || RequestedPresentationMode == ENativeWebPresentationMode::None ||
+		bPresentationPending || ActivePresentationMode != ENativeWebPresentationMode::None ||
+		bPresentationBindingAttempted) return;
+	FNativeWebError PresenterError;
+	StartRequestedPresenter(PresenterError);
 }
 
 UTextureRenderTarget2D* UNativeWebView::GetTexture() const

@@ -4,22 +4,27 @@
 #include "Assets/NativeWebContentAssets.h"
 #include "DesktopPlatformModule.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Framework/Notifications/NotificationManager.h"
 #include "IDesktopPlatform.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
 #include "DetailCategoryBuilder.h"
 #include "DetailLayoutBuilder.h"
 #include "DetailWidgetRow.h"
-#include "Misc/MessageDialog.h"
 #include "Misc/Paths.h"
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/Notifications/SNotificationList.h"
 #include "Widgets/SWindow.h"
 
 namespace
 {
-	void ShowError(const FString& Message)
+	void Notify(const FString& Message, SNotificationItem::ECompletionState State)
 	{
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Message));
+		FNotificationInfo Info(FText::FromString(Message));
+		Info.ExpireDuration = State == SNotificationItem::CS_Fail ? 7.0f : 3.0f;
+		Info.bUseSuccessFailIcons = true;
+		if (TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info))
+			Item->SetCompletionState(State);
 	}
 
 	void SelectAsset(IDetailLayoutBuilder& DetailBuilder, TWeakObjectPtr<UNativeWebContentAsset>& OutAsset)
@@ -36,13 +41,15 @@ namespace
 		FString Error;
 		if (bClear)
 		{
-			if (!NativeWebContentAssetActions::Clear(*Asset, Error)) ShowError(Error);
+			if (!NativeWebContentAssetActions::Clear(*Asset, Error))
+				Notify(FString::Printf(TEXT("Clear failed: %s"), *Error), SNotificationItem::CS_Fail);
+			else Notify(TEXT("Content cleared."), SNotificationItem::CS_Success);
 			return;
 		}
 		IDesktopPlatform* Desktop = FDesktopPlatformModule::Get();
 		if (!Desktop)
 		{
-			ShowError(TEXT("The platform file dialog service is unavailable."));
+			Notify(FString::Printf(TEXT("%s failed: the file dialog service is unavailable."), bExport ? TEXT("Export") : TEXT("Import")), SNotificationItem::CS_Fail);
 			return;
 		}
 		void* ParentWindow = nullptr;
@@ -70,16 +77,23 @@ namespace
 			bSelected = Desktop->OpenFileDialog(ParentWindow, TEXT("Import NativeWeb content"), InitialDirectory,
 			                                    Suggested, Filter, EFileDialogFlags::None, Filenames);
 		}
-		if (!bSelected || Filenames.IsEmpty()) return;
+		if (!bSelected || Filenames.IsEmpty())
+		{
+			Notify(bExport ? TEXT("Export canceled.") : TEXT("Import canceled."), SNotificationItem::CS_None);
+			return;
+		}
 		const FString& Path = Filenames[0];
 		if (bExport)
 		{
-			if (!NativeWebContentAssetActions::ExportFile(*Asset, Path, Error)) ShowError(Error);
+			if (!NativeWebContentAssetActions::ExportFile(*Asset, Path, Error))
+				Notify(FString::Printf(TEXT("Export failed: %s"), *Error), SNotificationItem::CS_Fail);
+			else Notify(TEXT("Content exported."), SNotificationItem::CS_Success);
 		}
 		else if (!NativeWebContentAssetActions::ImportFile(*Asset, Path, Error))
 		{
-			ShowError(Error);
+			Notify(FString::Printf(TEXT("Import failed: %s"), *Error), SNotificationItem::CS_Fail);
 		}
+		else Notify(TEXT("Content imported."), SNotificationItem::CS_Success);
 	}
 }
 
@@ -93,19 +107,10 @@ void FNativeWebContentAssetDetails::CustomizeDetails(IDetailLayoutBuilder& Detai
 	TWeakObjectPtr<UNativeWebContentAsset> Asset;
 	SelectAsset(DetailBuilder, Asset);
 	if (!Asset.IsValid()) return;
+	DetailBuilder.HideProperty(TEXT("Bytes"), UNativeWebContentAsset::StaticClass());
+	DetailBuilder.HideProperty(TEXT("CompressedBytes"), UNativeWebContentAsset::StaticClass());
+	DetailBuilder.HideProperty(TEXT("UncompressedSize"), UNativeWebContentAsset::StaticClass());
 	IDetailCategoryBuilder& Category = DetailBuilder.EditCategory(TEXT("Imported Content"));
-	if (!Asset->IsA<UNativeWebFontAsset>())
-	{
-		const FText TextSizeLabel = FText::FromString(TEXT("Imported text size (KB)"));
-		Category.AddCustomRow(TextSizeLabel)
-		.NameContent()[SNew(STextBlock).Text(TextSizeLabel)]
-		.ValueContent()[SNew(STextBlock).Text_Lambda([Asset]()
-		{
-			const UNativeWebContentAsset* Current = Asset.Get();
-			const double Kilobytes = Current ? double(Current->GetImportedSize()) / 1024.0 : 0.0;
-			return FText::AsNumber(Kilobytes);
-		})];
-	}
 	Category.AddCustomRow(FText::FromString(TEXT("Import"))).WholeRowContent()
 	[
 		SNew(SHorizontalBox)
@@ -120,7 +125,7 @@ void FNativeWebContentAssetDetails::CustomizeDetails(IDetailLayoutBuilder& Detai
 		+ SHorizontalBox::Slot().AutoWidth().Padding(2)
 		[
 			SNew(SButton).Text(FText::FromString(TEXT("Export")))
-			.IsEnabled_Lambda([Asset]() { const UNativeWebContentAsset* Current = Asset.Get(); return Current && Current->GetImportedSize() > 0; })
+			.IsEnabled_Lambda([Asset]() { const UNativeWebContentAsset* Current = Asset.Get(); return Current && Current->HasStoredContent(); })
 			.OnClicked_Lambda([Asset]()
 			{
 				RunDialogAction(Asset, true, false);
@@ -130,7 +135,7 @@ void FNativeWebContentAssetDetails::CustomizeDetails(IDetailLayoutBuilder& Detai
 		+ SHorizontalBox::Slot().AutoWidth().Padding(2)
 		[
 			SNew(SButton).Text(FText::FromString(TEXT("Clear")))
-			.IsEnabled_Lambda([Asset]() { const UNativeWebContentAsset* Current = Asset.Get(); return Current && (Current->GetImportedSize() != 0 || !Current->GetImportedFilename().IsEmpty()); })
+			.IsEnabled_Lambda([Asset]() { const UNativeWebContentAsset* Current = Asset.Get(); return Current && Current->HasStoredContent(); })
 			.OnClicked_Lambda([Asset]()
 			{
 				RunDialogAction(Asset, false, true);

@@ -85,7 +85,7 @@ bool NativeWebContentAssetActions::ExportFile(const UNativeWebContentAsset& Asse
 bool NativeWebContentAssetActions::Clear(UNativeWebContentAsset& Asset, FString& OutError)
 {
 	(void)OutError;
-	if (Asset.GetImportedSize() == 0 && Asset.GetImportedFilename().IsEmpty()) return true;
+	if (!Asset.HasStoredContent()) return true;
 	Asset.SetFlags(RF_Transactional);
 	FScopedTransaction Transaction(NSLOCTEXT("NativeWeb", "ClearContent", "Clear NativeWeb content"));
 	Asset.Modify();

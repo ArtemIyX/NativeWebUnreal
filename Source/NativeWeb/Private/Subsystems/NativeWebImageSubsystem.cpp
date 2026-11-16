@@ -94,13 +94,14 @@ FString UNativeWebImageSubsystem::MakeCacheKey(FName Namespace, const FString& K
 {
 	if (Namespace.IsNone() || Key.IsEmpty()) return FString();
 	return FString::Printf(TEXT("%s:%s:%llu:%s"), *GetGpuBudgetNamespace(), *Namespace.ToString(),
-		static_cast<unsigned long long>(ProviderGenerations.FindRef(Namespace)), *Key);
+	                       static_cast<unsigned long long>(ProviderGenerations.FindRef(Namespace)), *Key);
 }
 
 FString UNativeWebImageSubsystem::GetGpuBudgetNamespace() const
 {
 	if (GpuBudgetNamespace.IsEmpty())
-		const_cast<UNativeWebImageSubsystem*>(this)->GpuBudgetNamespace = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+		const_cast<UNativeWebImageSubsystem*>(this)->GpuBudgetNamespace = FGuid::NewGuid().ToString(
+			EGuidFormats::Digits);
 	return GpuBudgetNamespace;
 }
 
@@ -111,7 +112,7 @@ void UNativeWebImageSubsystem::SetGpuCacheBudgetBytes(uint64 InMaxGpuBytes)
 }
 
 void UNativeWebImageSubsystem::GetGpuCacheUsage(uint64& OutActiveBytes, uint64& OutRetiringBytes,
-	uint64& OutCachedBytes) const
+                                                uint64& OutCachedBytes) const
 {
 	GetImageGpuCacheUsage(GetGpuBudgetNamespace(), OutActiveBytes, OutRetiringBytes, OutCachedBytes);
 }
@@ -120,7 +121,8 @@ uint64 UNativeWebImageSubsystem::RequestImage(FName Namespace, const FString& Ke
 {
 	check(IsInGameThread());
 	if (Namespace.IsNone() || Key.IsEmpty() || !Completion || NextLeaseId == MAX_uint64 ||
-		NextSubmissionGeneration == MAX_uint64) return 0;
+		NextSubmissionGeneration == MAX_uint64)
+		return 0;
 	const TObjectPtr<UNativeWebImageProvider>* ProviderPtr = Providers.Find(Namespace);
 	UNativeWebImageProvider* Provider = ProviderPtr ? ProviderPtr->Get() : nullptr;
 	if (!IsValid(Provider)) return 0;
@@ -192,18 +194,18 @@ uint64 UNativeWebImageSubsystem::RequestImage(FName Namespace, const FString& Ke
 		else
 		{
 			AsyncTask(ENamedThreads::GameThread, [WeakThis, CacheKey, SubmissionGeneration,
-				Resolution = MoveTemp(Resolution)]() mutable
-			{
-				if (WeakThis.IsValid())
-					WeakThis->OnResolved(CacheKey, SubmissionGeneration, MoveTemp(Resolution));
-			});
+				          Resolution = MoveTemp(Resolution)]() mutable
+			          {
+				          if (WeakThis.IsValid())
+					          WeakThis->OnResolved(CacheKey, SubmissionGeneration, MoveTemp(Resolution));
+			          });
 		}
 	});
 	return Lease;
 }
 
 void UNativeWebImageSubsystem::OnResolved(FString CacheKey, uint64 SubmissionGeneration,
-	FNativeWebImageResolution Resolution)
+                                          FNativeWebImageResolution Resolution)
 {
 	check(IsInGameThread());
 	TSharedPtr<FEntry>* Found = Entries.Find(CacheKey);
@@ -332,8 +334,14 @@ void UNativeWebImageSubsystem::Deinitialize()
 	const FString BudgetNamespace = GetGpuBudgetNamespace();
 	const double GpuIdleSeconds = IdleSeconds;
 	if (EvictionTicker.IsValid()) FTSTicker::GetCoreTicker().RemoveTicker(EvictionTicker);
-	for (auto& Pair : Entries) if (Pair.Value && Pair.Value->LoadHandle.IsValid()) Pair.Value->LoadHandle->CancelHandle();
-	Entries.Reset(); LeaseToKey.Reset(); LoadedTextures.Reset(); Providers.Reset();
+	for (auto& Pair : Entries)
+		if (Pair.Value && Pair.Value->LoadHandle.IsValid())
+			Pair.Value->LoadHandle->
+			     CancelHandle();
+	Entries.Reset();
+	LeaseToKey.Reset();
+	LoadedTextures.Reset();
+	Providers.Reset();
 	ENQUEUE_RENDER_COMMAND(NativeWebImageCacheDeinitializeSweep)(
 		[BudgetNamespace, GpuIdleSeconds](FRHICommandListImmediate& RHICmdList)
 		{

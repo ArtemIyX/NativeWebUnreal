@@ -4,15 +4,48 @@
 #include "Misc/Compression.h"
 #include "UObject/ObjectSaveContext.h"
 
+THIRD_PARTY_INCLUDES_START
+#include <openssl/sha.h>
+THIRD_PARTY_INCLUDES_END
+
 namespace
 {
 	// Bound allocations when a serialized payload is corrupt or has been tampered with.
 	constexpr int32 MaxCompressedPayloadSize = 256 * 1024 * 1024;
+
+	FString HashImportedBytes(const TArray<uint8>& OriginalBytes)
+	{
+		if (OriginalBytes.IsEmpty()) return FString();
+		uint8 Digest[SHA256_DIGEST_LENGTH];
+		return SHA256(OriginalBytes.GetData(), static_cast<size_t>(OriginalBytes.Num()), Digest)
+			? BytesToHex(Digest, SHA256_DIGEST_LENGTH).ToLower() : FString();
+	}
 }
 
 void UNativeWebContentAsset::PostLoad()
 {
 	Super::PostLoad();
+	DecodedBytes.Reset();
+	bDecodedBytesCached = false;
+	RefreshImportedMetadata();
+}
+
+void UNativeWebContentAsset::RefreshImportedMetadata()
+{
+	ImportedSizeKB = double(FMath::Max(0, GetImportedSize())) / 1024.0;
+	if (!HasStoredContent())
+	{
+		ContentHash.Reset();
+		return;
+	}
+	if (!ContentHash.IsEmpty()) return;
+	const TArray<uint8>* OriginalBytes = nullptr;
+	FString Error;
+	if (TryGetBytes(OriginalBytes, Error) && !OriginalBytes->IsEmpty())
+	{
+		ContentHash = HashImportedBytes(*OriginalBytes);
+	}
+	// Deriving old metadata must not retain an additional decompressed buffer.
 	DecodedBytes.Reset();
 	bDecodedBytesCached = false;
 }
@@ -65,6 +98,7 @@ const TArray<uint8>& UNativeWebContentAsset::GetBytes() const
 #if WITH_EDITOR
 void UNativeWebContentAsset::SetImportedContent(TArray<uint8>&& InBytes, FString InFilename)
 {
+	FString NewHash = HashImportedBytes(InBytes);
 	Bytes.Reset();
 	CompressedBytes.Reset();
 	DecodedBytes.Reset();
@@ -89,6 +123,8 @@ void UNativeWebContentAsset::SetImportedContent(TArray<uint8>&& InBytes, FString
 	}
 	if (CompressedBytes.IsEmpty()) Bytes = MoveTemp(InBytes);
 	ImportedFilename = MoveTemp(InFilename);
+	ContentHash = MoveTemp(NewHash);
+	RefreshImportedMetadata();
 }
 
 void UNativeWebContentAsset::PostEditUndo()
@@ -96,6 +132,7 @@ void UNativeWebContentAsset::PostEditUndo()
 	Super::PostEditUndo();
 	DecodedBytes.Reset();
 	bDecodedBytesCached = false;
+	RefreshImportedMetadata();
 }
 
 void UNativeWebContentAsset::PreSave(FObjectPreSaveContext SaveContext)
@@ -106,6 +143,7 @@ void UNativeWebContentAsset::PreSave(FObjectPreSaveContext SaveContext)
 		TArray<uint8> LegacyBytes = MoveTemp(Bytes);
 		SetImportedContent(MoveTemp(LegacyBytes), FString(ImportedFilename));
 	}
+	RefreshImportedMetadata();
 	Super::PreSave(SaveContext);
 }
 #endif

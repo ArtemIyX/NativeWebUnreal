@@ -54,8 +54,13 @@ private:
 	};
 	void OnResolved(FString CacheKey, uint64 SubmissionGeneration, FNativeWebImageResolution Resolution);
 	void OnLoaded(FString CacheKey, uint64 SubmissionGeneration);
-	UPROPERTY(Transient) TMap<FName, TObjectPtr<UNativeWebImageProvider>> Providers;
-	UPROPERTY(Transient) TMap<FString, TObjectPtr<UTexture2D>> LoadedTextures;
+	
+	UPROPERTY(Transient) 
+	TMap<FName, TObjectPtr<UNativeWebImageProvider>> Providers;
+	
+	UPROPERTY(Transient) 
+	TMap<FString, TObjectPtr<UTexture2D>> LoadedTextures;
+	
 	TMap<FString, TSharedPtr<FEntry>> Entries;
 	TMap<uint64, FString> LeaseToKey;
 	TMap<FName, uint64> ProviderGenerations;

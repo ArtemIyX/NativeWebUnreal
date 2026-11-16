@@ -3,6 +3,7 @@
 #include "Assets/NativeWebContentAssetActions.h"
 #include "Assets/NativeWebContentAssets.h"
 #include "Assets/NativeWebAppAsset.h"
+#include "AssetRegistry/AssetData.h"
 #include "EditorValidatorSubsystem.h"
 #include "Editor.h"
 #include "Editor/TransBuffer.h"
@@ -135,6 +136,86 @@ bool FNativeWebContentAssetFontImportTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Original font leaf capitalization is retained"), Asset->GetImportedFilename(), FString(TEXT("Sample.TTF")));
 	TestEqual(TEXT("Imported binary bytes are retained"), Asset->GetBytes(), FontBytes);
 	IFileManager::Get().Delete(*Path);
+	IFileManager::Get().DeleteDirectory(*Root, false, true);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebContentAssetMetadataTest,
+	"NativeWeb.Editor.ContentMetadataAndHash",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FNativeWebContentAssetMetadataTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	if (!GEditor || !GEditor->Trans) { AddError(TEXT("Editor transaction buffer unavailable.")); return false; }
+	const FString Unique = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	const FString Root = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("NativeWebAssetTests"), Unique);
+	IFileManager::Get().MakeDirectory(*Root, true);
+	TArray<uint8> FontBytes;
+	FontBytes.SetNumZeroed(29);
+	FontBytes[1] = 1; FontBytes[5] = 1; FontBytes[23] = 28; FontBytes[27] = 1;
+	struct FCase { UClass* Class; const TCHAR* Filename; TArray<uint8> Bytes; const TCHAR* Hash; };
+	const TArray<FCase> Cases = {
+		{UNativeWebHtmlAsset::StaticClass(), TEXT("test.html"), {'a', 'b', 'c'}, TEXT("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")},
+		{UNativeWebCssAsset::StaticClass(), TEXT("test.css"), {'a', 'b', 'c'}, TEXT("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")},
+		{UNativeWebJavaScriptAsset::StaticClass(), TEXT("test.js"), {'a', 'b', 'c'}, TEXT("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")},
+		{UNativeWebFontAsset::StaticClass(), TEXT("test.ttf"), FontBytes, TEXT("9c4f1dcbc3f3d6f6af642e6ca37ba990565c786425703972a3a8ffcb17607e8e")}
+	};
+	const FDoubleProperty* SizeProperty = FindFProperty<FDoubleProperty>(UNativeWebContentAsset::StaticClass(), TEXT("ImportedSizeKB"));
+	const FStrProperty* HashProperty = FindFProperty<FStrProperty>(UNativeWebContentAsset::StaticClass(), TEXT("ContentHash"));
+	if (!TestNotNull(TEXT("Size property exists"), SizeProperty) || !TestNotNull(TEXT("Hash property exists"), HashProperty)) return false;
+	for (int32 Index = 0; Index < Cases.Num(); ++Index)
+	{
+		const FCase& Case = Cases[Index];
+		UPackage* Package = CreatePackage(*FString::Printf(TEXT("/Temp/NativeWebMetadata_%s_%d"), *Unique, Index));
+		UNativeWebContentAsset* Asset = NewObject<UNativeWebContentAsset>(Package, Case.Class, TEXT("Content"), RF_Transactional);
+		const FString Path = FPaths::Combine(Root, Case.Filename);
+		FFileHelper::SaveArrayToFile(Case.Bytes, *Path);
+		FString Error;
+		TestFalse(TEXT("Empty asset has no content"), Asset->HasStoredContent());
+		TestTrue(TEXT("Import succeeds"), NativeWebContentAssetActions::ImportFile(*Asset, Path, Error));
+		TestEqual(TEXT("Filename matches"), Asset->GetImportedFilename(), FString(Case.Filename));
+		TestEqual(TEXT("Size property reports KiB"), *SizeProperty->ContainerPtrToValuePtr<double>(Asset), double(Case.Bytes.Num()) / 1024.0);
+		TestEqual(TEXT("SHA-256 matches original bytes"), Asset->GetContentHash(), FString(Case.Hash));
+		TestFalse(TEXT("Wrong-extension import is rejected"), NativeWebContentAssetActions::ImportFile(*Asset, FPaths::Combine(Root, TEXT("wrong.png")), Error));
+		TestEqual(TEXT("Failed import preserves hash"), Asset->GetContentHash(), FString(Case.Hash));
+		FAssetData RegistryData(Asset);
+		FString RegistryHash;
+		TestTrue(TEXT("Hash is an asset registry tag"), RegistryData.GetTagValue(TEXT("ContentHash"), RegistryHash));
+		TestEqual(TEXT("Registry hash matches"), RegistryHash, FString(Case.Hash));
+		const FString ExportPath = FPaths::Combine(Root, FString(TEXT("export_")) + Case.Filename);
+		TestTrue(TEXT("Export succeeds"), NativeWebContentAssetActions::ExportFile(*Asset, ExportPath, Error));
+		TArray<uint8> Exported;
+		TestTrue(TEXT("Exported file can be read"), FFileHelper::LoadFileToArray(Exported, *ExportPath));
+		TestTrue(TEXT("Export preserves exact bytes"), Exported == Case.Bytes);
+		TArray<uint8> Saved;
+		FObjectWriter Writer(Asset, Saved);
+		UPackage* ReloadPackage = CreatePackage(*FString::Printf(TEXT("/Temp/NativeWebMetadataReload_%s_%d"), *Unique, Index));
+		UNativeWebContentAsset* Reloaded = NewObject<UNativeWebContentAsset>(ReloadPackage, Case.Class);
+		FObjectReader Reader(Reloaded, Saved);
+		Reloaded->PostLoad();
+		TestEqual(TEXT("Reloaded hash matches"), Reloaded->GetContentHash(), FString(Case.Hash));
+		TestTrue(TEXT("Reloaded bytes match"), Reloaded->GetBytes() == Case.Bytes);
+		HashProperty->ContainerPtrToValuePtr<FString>(Reloaded)->Reset();
+		Reloaded->GetOutermost()->SetDirtyFlag(false);
+		Reloaded->PostLoad();
+		TestEqual(TEXT("Missing legacy hash is derived"), Reloaded->GetContentHash(), FString(Case.Hash));
+		TestFalse(TEXT("Deriving metadata does not dirty package"), Reloaded->GetOutermost()->IsDirty());
+		TArray<uint8> Changed = Case.Bytes;
+		Changed.Add('x');
+		Reloaded->SetImportedContent(MoveTemp(Changed), Case.Filename);
+		TestNotEqual(TEXT("Changed bytes produce a different hash"), Reloaded->GetContentHash(), FString(Case.Hash));
+		TestTrue(TEXT("Clear succeeds"), NativeWebContentAssetActions::Clear(*Asset, Error));
+		TestTrue(TEXT("Clear removes content and hash"), !Asset->HasStoredContent() && Asset->GetContentHash().IsEmpty());
+		TestTrue(TEXT("Undo clear succeeds"), GEditor->Trans->Undo());
+		TestEqual(TEXT("Undo restores hash"), Asset->GetContentHash(), FString(Case.Hash));
+		TestEqual(TEXT("Undo restores size"), *SizeProperty->ContainerPtrToValuePtr<double>(Asset), double(Case.Bytes.Num()) / 1024.0);
+		TestEqual(TEXT("Undo restores filename"), Asset->GetImportedFilename(), FString(Case.Filename));
+		TestTrue(TEXT("Redo clear succeeds"), GEditor->Trans->Redo());
+		TestTrue(TEXT("Redo clears hash"), Asset->GetContentHash().IsEmpty());
+		IFileManager::Get().Delete(*Path);
+		IFileManager::Get().Delete(*ExportPath);
+	}
 	IFileManager::Get().DeleteDirectory(*Root, false, true);
 	return true;
 }

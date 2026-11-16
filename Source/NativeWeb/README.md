@@ -366,7 +366,10 @@ export and participate in editor undo/redo. Compressible HTML, CSS, JavaScript,
 and font bytes are stored with zlib and decoded on demand; incompressible or
 larger-than-256 MiB payloads remain raw. Existing raw assets remain readable and
 are compressed when next saved or cooked. The displayed size is the original
-uncompressed size. Text input must be non-empty valid
+uncompressed size. The read-only SHA-256 identifies the original imported bytes
+and is exposed as the `ContentHash` asset-registry tag. Older assets derive this
+metadata when loaded without becoming dirty; save them to persist the tag in
+the asset registry. Text input must be non-empty valid
 UTF-8 after an optional BOM and cannot contain NUL. Fonts must have a safe
 `.ttf` or `.otf` leaf filename and a bounded SFNT table directory. Duplicate
 font filenames are checked case-insensitively within each app.

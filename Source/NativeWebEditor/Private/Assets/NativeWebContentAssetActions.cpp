@@ -52,7 +52,9 @@ bool NativeWebContentAssetActions::ImportFile(UNativeWebContentAsset& Asset, con
 		FString Decoded;
 		if (!UNativeWebContentAsset::DecodeTextPayload(Bytes, Decoded, OutError)) return false;
 	}
-	if (Asset.GetBytes() == Bytes && Asset.GetImportedFilename() == LeafName) return true;
+	const TArray<uint8>* ExistingBytes = nullptr;
+	FString ExistingError;
+	if (Asset.TryGetBytes(ExistingBytes, ExistingError) && *ExistingBytes == Bytes && Asset.GetImportedFilename() == LeafName) return true;
 	Asset.SetFlags(RF_Transactional);
 	FScopedTransaction Transaction(NSLOCTEXT("NativeWeb", "ImportContent", "Import NativeWeb content"));
 	Asset.Modify();
@@ -65,12 +67,14 @@ bool NativeWebContentAssetActions::ImportFile(UNativeWebContentAsset& Asset, con
 bool NativeWebContentAssetActions::ExportFile(const UNativeWebContentAsset& Asset, const FString& Path, FString& OutError)
 {
 	if (!IsPathAllowed(Asset, Path, OutError)) return false;
-	if (Asset.GetBytes().IsEmpty())
+	const TArray<uint8>* Bytes = nullptr;
+	if (!Asset.TryGetBytes(Bytes, OutError)) return false;
+	if (Bytes->IsEmpty())
 	{
 		OutError = TEXT("There is no imported content to export.");
 		return false;
 	}
-	if (!FFileHelper::SaveArrayToFile(Asset.GetBytes(), *Path))
+	if (!FFileHelper::SaveArrayToFile(*Bytes, *Path))
 	{
 		OutError = FString::Printf(TEXT("Could not write exported content to '%s'."), *Path);
 		return false;
@@ -81,7 +85,7 @@ bool NativeWebContentAssetActions::ExportFile(const UNativeWebContentAsset& Asse
 bool NativeWebContentAssetActions::Clear(UNativeWebContentAsset& Asset, FString& OutError)
 {
 	(void)OutError;
-	if (Asset.GetBytes().IsEmpty() && Asset.GetImportedFilename().IsEmpty()) return true;
+	if (!Asset.HasStoredContent()) return true;
 	Asset.SetFlags(RF_Transactional);
 	FScopedTransaction Transaction(NSLOCTEXT("NativeWeb", "ClearContent", "Clear NativeWeb content"));
 	Asset.Modify();

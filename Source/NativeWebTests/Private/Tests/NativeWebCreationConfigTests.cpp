@@ -16,7 +16,7 @@ bool FNativeWebCreationConfigDefaultsTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("Surface defaults to the documented pixel size"), Surface.PixelSize, FIntPoint(480, 240));
 	TestEqual(TEXT("Surface defaults to unit DPI"), Surface.DpiScale, 1.0f);
-	TestEqual(TEXT("Surface defaults to opaque black"), Surface.ClearColor, FColor(0, 0, 0, 255));
+	TestEqual(TEXT("Surface defaults to transparent black"), Surface.ClearColor, FColor::Transparent);
 	TestEqual(TEXT("Presentation defaults to GPU viewport"), Presentation.PresentationMode,
 	          ENativeWebPresentationMode::GpuViewport);
 	TestTrue(TEXT("Presentation defaults to Slate fallback"), Presentation.bFallbackToSlate);

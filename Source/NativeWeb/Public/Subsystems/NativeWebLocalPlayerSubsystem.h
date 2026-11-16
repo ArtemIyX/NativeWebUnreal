@@ -175,6 +175,7 @@ private:
 	                         const FNativeWebPresentationConfig& PresentationConfig,
 	                         FNativeWebError& OutError) const;
 	void CompleteAppDependencyLoad(FName Name, uint64 RequestGeneration);
+	void HandleOwningWorldBeginTearDown(UWorld* World);
 
 	UPROPERTY(Transient)
 	/** @brief Reflected data field `Views`. */
@@ -191,5 +192,6 @@ private:
 	TSet<FName> HeldDependencyCompletionsForTests;
 #endif
 	FTSTicker::FDelegateHandle TickHandle;
+	FDelegateHandle WorldTearDownHandle;
 	bool Tick(float DeltaTime);
 };

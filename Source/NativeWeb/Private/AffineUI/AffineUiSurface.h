@@ -11,6 +11,19 @@
 #include "Templates/SharedPointer.h"
 #include "Templates/UniquePtr.h"
 
+namespace NativeWebSurface
+{
+	/** @brief Associates display-encoded RGB with alpha for the backend's premultiplied surface contract. */
+	inline FColor PremultiplyDisplayColor(const FColor& Color)
+	{
+		const uint32 Alpha = Color.A;
+		return FColor(
+			static_cast<uint8>((static_cast<uint32>(Color.R) * Alpha + 127u) / 255u),
+			static_cast<uint8>((static_cast<uint32>(Color.G) * Alpha + 127u) / 255u),
+			static_cast<uint8>((static_cast<uint32>(Color.B) * Alpha + 127u) / 255u), Color.A);
+	}
+}
+
 /**
  * @brief Declares the u texture render target2 d type and its operations.
  * @ingroup NativeWeb
@@ -130,7 +143,7 @@ struct NATIVEWEB_API FAffineUiSurfaceDesc
 {
 	FIntPoint PixelSize = FIntPoint(480, 240);
 	float DpiScale = 1.0f;
-	FColor ClearColor = FColor(0, 0, 0, 255);
+	FColor ClearColor = FColor::Transparent;
 	FAffineUiContent Content;
 	FString FontDirectory;
 	TSharedPtr<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe> FontAssets;

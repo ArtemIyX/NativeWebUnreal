@@ -3,6 +3,7 @@
 #include "Assets/NativeWebContentAssetActions.h"
 #include "Assets/NativeWebContentAssets.h"
 #include "Assets/NativeWebAppAsset.h"
+#include "AssetRegistry/AssetData.h"
 #include "EditorValidatorSubsystem.h"
 #include "Editor.h"
 #include "Editor/TransBuffer.h"
@@ -12,7 +13,11 @@
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
+#include "Serialization/ObjectReader.h"
+#include "Serialization/ObjectWriter.h"
 #include "UObject/StrongObjectPtr.h"
+#include "UObject/UnrealType.h"
+#include "UObject/SavePackage.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebContentAssetImportExportUndoTest,
 	"NativeWeb.Editor.ContentImportExportClearAndTransactions",
@@ -32,6 +37,7 @@ bool FNativeWebContentAssetImportExportUndoTest::RunTest(const FString& Paramete
 	const FString ImportPath = FPaths::Combine(Root, TEXT("source.html"));
 	const FString ExportPath = FPaths::Combine(Root, TEXT("export.html"));
 	TArray<uint8> Original = {0xEF, 0xBB, 0xBF, '<', 'p', '>', 0xC3, 0xA9, '<', '/', 'p', '>'};
+	for (int32 Index = 0; Index < 4096; ++Index) Original.Add('x');
 	FFileHelper::SaveArrayToFile(Original, *ImportPath);
 	UPackage* Package = CreatePackage(*FString::Printf(TEXT("/Temp/NativeWebAssetTest_%s"), *Unique));
 	UNativeWebHtmlAsset* Asset = NewObject<UNativeWebHtmlAsset>(Package, FName(TEXT("Html")), RF_Transactional);
@@ -42,6 +48,51 @@ bool FNativeWebContentAssetImportExportUndoTest::RunTest(const FString& Paramete
 	TestTrue(TEXT("Import preserves BOM and source bytes"), NativeWebContentAssetActions::ImportFile(*Asset, ImportPath, Error));
 	TestEqual(TEXT("Imported filename is the source leaf"), Asset->GetImportedFilename(), FString(TEXT("source.html")));
 	TestEqual(TEXT("Imported payload byte count is exact"), Asset->GetBytes().Num(), Original.Num());
+	const FArrayProperty* RawProperty = FindFProperty<FArrayProperty>(UNativeWebContentAsset::StaticClass(), TEXT("Bytes"));
+	const FArrayProperty* CompressedProperty = FindFProperty<FArrayProperty>(UNativeWebContentAsset::StaticClass(), TEXT("CompressedBytes"));
+	if (TestNotNull(TEXT("Legacy byte property exists"), RawProperty) &&
+		TestNotNull(TEXT("Compressed byte property exists"), CompressedProperty))
+	{
+		const TArray<uint8>& StoredRaw = *RawProperty->ContainerPtrToValuePtr<TArray<uint8>>(Asset);
+		const TArray<uint8>& StoredCompressed = *CompressedProperty->ContainerPtrToValuePtr<TArray<uint8>>(Asset);
+		TestTrue(TEXT("Compressible content is stored without raw duplicate"), StoredRaw.IsEmpty());
+		TestTrue(TEXT("Compressed payload is smaller"), !StoredCompressed.IsEmpty() && StoredCompressed.Num() < Original.Num());
+	}
+	TestEqual(TEXT("Displayed imported size is uncompressed"), Asset->GetImportedSize(), Original.Num());
+	TArray<uint8> Serialized;
+	FObjectWriter Writer(Asset, Serialized);
+	UNativeWebHtmlAsset* Reloaded = NewObject<UNativeWebHtmlAsset>();
+	FObjectReader Reader(Reloaded, Serialized);
+	TestTrue(TEXT("Serialized compressed content reloads exactly"), Reloaded->GetBytes() == Original);
+	UNativeWebHtmlAsset* Damaged = NewObject<UNativeWebHtmlAsset>();
+	FObjectReader DamagedReader(Damaged, Serialized);
+	if (CompressedProperty)
+	{
+		TArray<uint8>& DamagedBytes = *CompressedProperty->ContainerPtrToValuePtr<TArray<uint8>>(Damaged);
+		DamagedBytes.Init(0, DamagedBytes.Num());
+		const TArray<uint8>* Decoded = nullptr;
+		FString DecodeError;
+		AddExpectedError(TEXT("FCompression::UncompressMemory - Failed to uncompress"), EAutomationExpectedErrorFlags::Contains, 1);
+		TestFalse(TEXT("Corrupt compressed content is reported"), Damaged->TryGetBytes(Decoded, DecodeError));
+		TestFalse(TEXT("Corrupt compressed content provides an error"), DecodeError.IsEmpty());
+	}
+	if (RawProperty && CompressedProperty)
+	{
+		UPackage* LegacyPackage = CreatePackage(*FString::Printf(TEXT("/Temp/NativeWebLegacy_%s"), *Unique));
+		UNativeWebHtmlAsset* Legacy = NewObject<UNativeWebHtmlAsset>(LegacyPackage, TEXT("Legacy"), RF_Public | RF_Standalone);
+		*RawProperty->ContainerPtrToValuePtr<TArray<uint8>>(Legacy) = Original;
+		TestTrue(TEXT("Legacy raw payload remains readable"), Legacy->GetBytes() == Original);
+		const FString LegacyPath = FPaths::Combine(Root, TEXT("legacy.uasset"));
+		FSavePackageArgs SaveArgs;
+		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+		SaveArgs.SaveFlags = SAVE_NoError;
+		TestTrue(TEXT("Legacy package saves"), UPackage::SavePackage(LegacyPackage, Legacy, *LegacyPath, SaveArgs));
+		TestTrue(TEXT("Saving migrates compressible legacy payload"),
+			!CompressedProperty->ContainerPtrToValuePtr<TArray<uint8>>(Legacy)->IsEmpty() &&
+			RawProperty->ContainerPtrToValuePtr<TArray<uint8>>(Legacy)->IsEmpty());
+		TestTrue(TEXT("Migrated legacy payload remains unchanged"), Legacy->GetBytes() == Original);
+		IFileManager::Get().Delete(*LegacyPath);
+	}
 	TestTrue(TEXT("Import dirties the asset package"), Package->IsDirty());
 	TestTrue(TEXT("Export writes the exact original bytes"), NativeWebContentAssetActions::ExportFile(*Asset, ExportPath, Error));
 	TArray<uint8> Exported;
@@ -85,6 +136,86 @@ bool FNativeWebContentAssetFontImportTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Original font leaf capitalization is retained"), Asset->GetImportedFilename(), FString(TEXT("Sample.TTF")));
 	TestEqual(TEXT("Imported binary bytes are retained"), Asset->GetBytes(), FontBytes);
 	IFileManager::Get().Delete(*Path);
+	IFileManager::Get().DeleteDirectory(*Root, false, true);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebContentAssetMetadataTest,
+	"NativeWeb.Editor.ContentMetadataAndHash",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FNativeWebContentAssetMetadataTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	if (!GEditor || !GEditor->Trans) { AddError(TEXT("Editor transaction buffer unavailable.")); return false; }
+	const FString Unique = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	const FString Root = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("NativeWebAssetTests"), Unique);
+	IFileManager::Get().MakeDirectory(*Root, true);
+	TArray<uint8> FontBytes;
+	FontBytes.SetNumZeroed(29);
+	FontBytes[1] = 1; FontBytes[5] = 1; FontBytes[23] = 28; FontBytes[27] = 1;
+	struct FCase { UClass* Class; const TCHAR* Filename; TArray<uint8> Bytes; const TCHAR* Hash; };
+	const TArray<FCase> Cases = {
+		{UNativeWebHtmlAsset::StaticClass(), TEXT("test.html"), {'a', 'b', 'c'}, TEXT("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")},
+		{UNativeWebCssAsset::StaticClass(), TEXT("test.css"), {'a', 'b', 'c'}, TEXT("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")},
+		{UNativeWebJavaScriptAsset::StaticClass(), TEXT("test.js"), {'a', 'b', 'c'}, TEXT("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")},
+		{UNativeWebFontAsset::StaticClass(), TEXT("test.ttf"), FontBytes, TEXT("9c4f1dcbc3f3d6f6af642e6ca37ba990565c786425703972a3a8ffcb17607e8e")}
+	};
+	const FDoubleProperty* SizeProperty = FindFProperty<FDoubleProperty>(UNativeWebContentAsset::StaticClass(), TEXT("ImportedSizeKB"));
+	const FStrProperty* HashProperty = FindFProperty<FStrProperty>(UNativeWebContentAsset::StaticClass(), TEXT("ContentHash"));
+	if (!TestNotNull(TEXT("Size property exists"), SizeProperty) || !TestNotNull(TEXT("Hash property exists"), HashProperty)) return false;
+	for (int32 Index = 0; Index < Cases.Num(); ++Index)
+	{
+		const FCase& Case = Cases[Index];
+		UPackage* Package = CreatePackage(*FString::Printf(TEXT("/Temp/NativeWebMetadata_%s_%d"), *Unique, Index));
+		UNativeWebContentAsset* Asset = NewObject<UNativeWebContentAsset>(Package, Case.Class, TEXT("Content"), RF_Transactional);
+		const FString Path = FPaths::Combine(Root, Case.Filename);
+		FFileHelper::SaveArrayToFile(Case.Bytes, *Path);
+		FString Error;
+		TestFalse(TEXT("Empty asset has no content"), Asset->HasStoredContent());
+		TestTrue(TEXT("Import succeeds"), NativeWebContentAssetActions::ImportFile(*Asset, Path, Error));
+		TestEqual(TEXT("Filename matches"), Asset->GetImportedFilename(), FString(Case.Filename));
+		TestEqual(TEXT("Size property reports KiB"), *SizeProperty->ContainerPtrToValuePtr<double>(Asset), double(Case.Bytes.Num()) / 1024.0);
+		TestEqual(TEXT("SHA-256 matches original bytes"), Asset->GetContentHash(), FString(Case.Hash));
+		TestFalse(TEXT("Wrong-extension import is rejected"), NativeWebContentAssetActions::ImportFile(*Asset, FPaths::Combine(Root, TEXT("wrong.png")), Error));
+		TestEqual(TEXT("Failed import preserves hash"), Asset->GetContentHash(), FString(Case.Hash));
+		FAssetData RegistryData(Asset);
+		FString RegistryHash;
+		TestTrue(TEXT("Hash is an asset registry tag"), RegistryData.GetTagValue(TEXT("ContentHash"), RegistryHash));
+		TestEqual(TEXT("Registry hash matches"), RegistryHash, FString(Case.Hash));
+		const FString ExportPath = FPaths::Combine(Root, FString(TEXT("export_")) + Case.Filename);
+		TestTrue(TEXT("Export succeeds"), NativeWebContentAssetActions::ExportFile(*Asset, ExportPath, Error));
+		TArray<uint8> Exported;
+		TestTrue(TEXT("Exported file can be read"), FFileHelper::LoadFileToArray(Exported, *ExportPath));
+		TestTrue(TEXT("Export preserves exact bytes"), Exported == Case.Bytes);
+		TArray<uint8> Saved;
+		FObjectWriter Writer(Asset, Saved);
+		UPackage* ReloadPackage = CreatePackage(*FString::Printf(TEXT("/Temp/NativeWebMetadataReload_%s_%d"), *Unique, Index));
+		UNativeWebContentAsset* Reloaded = NewObject<UNativeWebContentAsset>(ReloadPackage, Case.Class);
+		FObjectReader Reader(Reloaded, Saved);
+		Reloaded->PostLoad();
+		TestEqual(TEXT("Reloaded hash matches"), Reloaded->GetContentHash(), FString(Case.Hash));
+		TestTrue(TEXT("Reloaded bytes match"), Reloaded->GetBytes() == Case.Bytes);
+		HashProperty->ContainerPtrToValuePtr<FString>(Reloaded)->Reset();
+		Reloaded->GetOutermost()->SetDirtyFlag(false);
+		Reloaded->PostLoad();
+		TestEqual(TEXT("Missing legacy hash is derived"), Reloaded->GetContentHash(), FString(Case.Hash));
+		TestFalse(TEXT("Deriving metadata does not dirty package"), Reloaded->GetOutermost()->IsDirty());
+		TArray<uint8> Changed = Case.Bytes;
+		Changed.Add('x');
+		Reloaded->SetImportedContent(MoveTemp(Changed), Case.Filename);
+		TestNotEqual(TEXT("Changed bytes produce a different hash"), Reloaded->GetContentHash(), FString(Case.Hash));
+		TestTrue(TEXT("Clear succeeds"), NativeWebContentAssetActions::Clear(*Asset, Error));
+		TestTrue(TEXT("Clear removes content and hash"), !Asset->HasStoredContent() && Asset->GetContentHash().IsEmpty());
+		TestTrue(TEXT("Undo clear succeeds"), GEditor->Trans->Undo());
+		TestEqual(TEXT("Undo restores hash"), Asset->GetContentHash(), FString(Case.Hash));
+		TestEqual(TEXT("Undo restores size"), *SizeProperty->ContainerPtrToValuePtr<double>(Asset), double(Case.Bytes.Num()) / 1024.0);
+		TestEqual(TEXT("Undo restores filename"), Asset->GetImportedFilename(), FString(Case.Filename));
+		TestTrue(TEXT("Redo clear succeeds"), GEditor->Trans->Redo());
+		TestTrue(TEXT("Redo clears hash"), Asset->GetContentHash().IsEmpty());
+		IFileManager::Get().Delete(*Path);
+		IFileManager::Get().Delete(*ExportPath);
+	}
 	IFileManager::Get().DeleteDirectory(*Root, false, true);
 	return true;
 }

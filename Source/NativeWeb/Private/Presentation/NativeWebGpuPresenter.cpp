@@ -6,6 +6,8 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "Framework/Application/IInputProcessor.h"
 #include "Framework/Application/SlateApplication.h"
+#include "GenericPlatform/GenericApplication.h"
+#include "GenericPlatform/GenericWindow.h"
 #include "DynamicRHI.h"
 #include "GlobalShader.h"
 #include "CommonRenderResources.h"
@@ -18,6 +20,7 @@
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
 #include "RenderTargetPool.h"
+#include "SystemTextures.h"
 #include "RenderingThread.h"
 #include "RHIStaticStates.h"
 #include "SceneView.h"
@@ -89,9 +92,9 @@ namespace
 	public:
 		BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
 			SHADER_PARAMETER_RDG_TEXTURE(Texture2D, WebTexture)
-			SHADER_PARAMETER_SAMPLER(SamplerState, WebSampler)
+			SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SceneTexture)
 			SHADER_PARAMETER(FVector4f, DrawRect)
-			SHADER_PARAMETER(uint32, EncodeOutputSrgb)
+			SHADER_PARAMETER(uint32, CompositeInShader)
 			RENDER_TARGET_BINDING_SLOTS()
 		END_SHADER_PARAMETER_STRUCT()
 
@@ -113,23 +116,31 @@ namespace
 			CreateRenderTarget(SceneRHI, TEXT("NativeWeb.SceneOutput")));
 		FRDGTextureRef WebTexture = GraphBuilder.RegisterExternalTexture(
 			CreateRenderTarget(WebRHI, TEXT("NativeWeb.Web")));
+		const FRHITextureDesc& SceneDesc = SceneRHI->GetDesc();
+		const bool bHardwareSrgb = SceneDesc.Format != PF_A2B10G10R10 &&
+			EnumHasAnyFlags(SceneDesc.Flags, ETextureCreateFlags::SRGB);
+		FRDGTextureRef SceneCopy = nullptr;
+		if (!bHardwareSrgb)
+		{
+			FRDGTextureDesc CopyDesc = FRDGTextureDesc::Create2D(
+				FIntPoint(SceneDesc.Extent.X, SceneDesc.Extent.Y), SceneDesc.Format, FClearValueBinding::None,
+				ETextureCreateFlags::ShaderResource | ETextureCreateFlags::RenderTargetable);
+			SceneCopy = GraphBuilder.CreateTexture(CopyDesc, TEXT("NativeWeb.SceneBeforeComposite"));
+			FRHICopyTextureInfo CopyInfo;
+			CopyInfo.SourcePosition = FIntVector(DrawRect.Min.X, DrawRect.Min.Y, 0);
+			CopyInfo.DestPosition = CopyInfo.SourcePosition;
+			CopyInfo.Size = FIntVector(DrawRect.Width(), DrawRect.Height(), 1);
+			AddCopyTexturePass(GraphBuilder, OutputTexture, SceneCopy, CopyInfo);
+		}
 		FNativeWebViewportPS::FParameters* Parameters = GraphBuilder.AllocParameters<
 			FNativeWebViewportPS::FParameters>();
 		Parameters->WebTexture = WebTexture;
-		// Use one texel per pixel at native size and blend texels only when scaling.
-		const bool bNativeSize = DrawRect.Size() == WebRHI->GetDesc().Extent;
-		Parameters->WebSampler = bNativeSize
-			                         ? TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI()
-			                         : TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+		Parameters->SceneTexture = SceneCopy ? SceneCopy : GSystemTextures.GetBlackDummy(GraphBuilder);
 		Parameters->DrawRect = FVector4f(static_cast<float>(DrawRect.Min.X),
 		                                 static_cast<float>(DrawRect.Min.Y),
 		                                 static_cast<float>(DrawRect.Width()),
 		                                 static_cast<float>(DrawRect.Height()));
-		const FRHITextureDesc& SceneDesc = SceneRHI->GetDesc();
-		// D3D11 has no sRGB render-target view for the supported 10-bit format.
-		const bool bHardwareSrgb = SceneDesc.Format != PF_A2B10G10R10 &&
-			EnumHasAnyFlags(SceneDesc.Flags, ETextureCreateFlags::SRGB);
-		Parameters->EncodeOutputSrgb = bHardwareSrgb ? 0u : 1u;
+		Parameters->CompositeInShader = bHardwareSrgb ? 0u : 1u;
 		Parameters->RenderTargets[0] = FRenderTargetBinding(OutputTexture, ERenderTargetLoadAction::ELoad);
 
 		GraphBuilder.AddPass(RDG_EVENT_NAME("NativeWeb GPU Viewport"), Parameters, ERDGPassFlags::Raster,
@@ -141,7 +152,9 @@ namespace
 				                     GetGlobalShaderMap(GMaxRHIFeatureLevel));
 			                     FGraphicsPipelineStateInitializer Pipeline;
 			                     RHICmdList.ApplyCachedRenderTargets(Pipeline);
-			                     Pipeline.BlendState = TStaticBlendState<>::GetRHI();
+			                     Pipeline.BlendState = Parameters->CompositeInShader == 0
+				                     ? TStaticBlendState<CW_RGB, BO_Add, BF_One, BF_InverseSourceAlpha>::GetRHI()
+				                     : TStaticBlendState<CW_RGB>::GetRHI();
 			                     Pipeline.RasterizerState = TStaticRasterizerState<>::GetRHI();
 			                     Pipeline.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
 			                     Pipeline.PrimitiveType = PT_TriangleList;
@@ -361,7 +374,10 @@ public:
 		{
 			SlateApp.SetKeyboardFocus(Widget, EFocusCause::Mouse);
 			if (const TSharedPtr<SWindow> GameWindow = GetViewportWindow(SlateApp))
-				SlateApp.GetPlatformApplication()->SetCapture(GameWindow->GetNativeWindow());
+			{
+				CapturedWindow = GameWindow->GetNativeWindow();
+				SlateApp.GetPlatformApplication()->SetCapture(CapturedWindow.Pin());
+			}
 		}
 		SetFocus(true);
 		return true;
@@ -382,7 +398,7 @@ public:
 		          0.0f, Event.IsShiftDown(), true);
 		bPointerPressed = false;
 		bPointerInside = false;
-		SlateApp.GetPlatformApplication()->SetCapture(nullptr);
+		ReleasePlatformCapture(SlateApp);
 		return true;
 	}
 
@@ -430,7 +446,7 @@ public:
 private:
 	bool HandleKey(FSlateApplication& SlateApp, const FKeyEvent& Event, ENativeWebInputType Type)
 	{
-		if (!bEnabled) return false;
+		if (!bEnabled || !IsTargetWindow(SlateApp, Event)) return false;
 		if (NativeWebInputRouting::IsConsoleActive(Player.Get()))
 		{
 			return NativeWebInputRouting::RouteKeyToConsole(Player.Get(), Event,
@@ -585,7 +601,7 @@ private:
 			if (UNativeWebView* Pinned = View.Get()) Pinned->ForwardInput(Event);
 			bPointerPressed = false;
 			bPointerInside = false;
-			SlateApp.GetPlatformApplication()->SetCapture(nullptr);
+			ReleasePlatformCapture(SlateApp);
 		}
 		if (bPreserveKeyboardFocus) return;
 		SetFocus(false);
@@ -596,10 +612,20 @@ private:
 		}
 	}
 
+	void ReleasePlatformCapture(FSlateApplication& SlateApp)
+	{
+		const TSharedPtr<FGenericWindow> OurWindow = CapturedWindow.Pin();
+		if (OurWindow.IsValid() &&
+			SlateApp.GetPlatformApplication()->GetCapture() == OurWindow->GetOSWindowHandle())
+			SlateApp.GetPlatformApplication()->SetCapture(nullptr);
+		CapturedWindow.Reset();
+	}
+
 	TWeakObjectPtr<UNativeWebView> View;
 	TWeakObjectPtr<ULocalPlayer> Player;
 	FViewport* TargetViewport = nullptr;
 	TWeakPtr<SViewport> ViewportWidget;
+	TWeakPtr<FGenericWindow> CapturedWindow;
 	TSharedRef<FNativeWebGpuRenderState, ESPMode::ThreadSafe> State;
 	FIntPoint LastSize = FIntPoint::ZeroValue;
 	float LastDpi = 0.0f;

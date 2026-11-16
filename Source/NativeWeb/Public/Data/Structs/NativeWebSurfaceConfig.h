@@ -23,7 +23,7 @@ struct NATIVEWEB_API FNativeWebSurfaceConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NativeWeb")
 	float DpiScale = 1.0f;
 
-	/** @brief Opaque clear color used before document content is rendered. */
+	/** @brief Clear color used before document content is rendered; transparent by default. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NativeWeb")
-	FColor ClearColor = FColor(0, 0, 0, 255);
+	FColor ClearColor = FColor::Transparent;
 };

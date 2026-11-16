@@ -1,12 +1,150 @@
 #include "Assets/NativeWebContentAssets.h"
 
 #include "Misc/Paths.h"
+#include "Misc/Compression.h"
+#include "UObject/ObjectSaveContext.h"
+
+THIRD_PARTY_INCLUDES_START
+#include <openssl/sha.h>
+THIRD_PARTY_INCLUDES_END
+
+namespace
+{
+	// Bound allocations when a serialized payload is corrupt or has been tampered with.
+	constexpr int32 MaxCompressedPayloadSize = 256 * 1024 * 1024;
+
+	FString HashImportedBytes(const TArray<uint8>& OriginalBytes)
+	{
+		if (OriginalBytes.IsEmpty()) return FString();
+		uint8 Digest[SHA256_DIGEST_LENGTH];
+		return SHA256(OriginalBytes.GetData(), static_cast<size_t>(OriginalBytes.Num()), Digest)
+			? BytesToHex(Digest, SHA256_DIGEST_LENGTH).ToLower() : FString();
+	}
+}
+
+void UNativeWebContentAsset::PostLoad()
+{
+	Super::PostLoad();
+	DecodedBytes.Reset();
+	bDecodedBytesCached = false;
+	RefreshImportedMetadata();
+}
+
+void UNativeWebContentAsset::RefreshImportedMetadata()
+{
+	ImportedSizeKB = double(FMath::Max(0, GetImportedSize())) / 1024.0;
+	if (!HasStoredContent())
+	{
+		ContentHash.Reset();
+		return;
+	}
+	if (!ContentHash.IsEmpty()) return;
+	const TArray<uint8>* OriginalBytes = nullptr;
+	FString Error;
+	if (TryGetBytes(OriginalBytes, Error) && !OriginalBytes->IsEmpty())
+	{
+		ContentHash = HashImportedBytes(*OriginalBytes);
+	}
+	// Deriving old metadata must not retain an additional decompressed buffer.
+	DecodedBytes.Reset();
+	bDecodedBytesCached = false;
+}
+
+bool UNativeWebContentAsset::TryGetBytes(const TArray<uint8>*& OutBytes, FString& OutError) const
+{
+	OutBytes = nullptr;
+	OutError.Reset();
+	if (CompressedBytes.IsEmpty())
+	{
+		if (UncompressedSize != 0)
+		{
+			OutError = TEXT("Compressed content is missing.");
+			return false;
+		}
+		OutBytes = &Bytes;
+		return true;
+	}
+	if (!Bytes.IsEmpty() || UncompressedSize <= 0 || UncompressedSize > MaxCompressedPayloadSize)
+	{
+		OutError = TEXT("Compressed content has invalid storage metadata.");
+		return false;
+	}
+	if (!bDecodedBytesCached)
+	{
+		TArray<uint8> Decoded;
+		Decoded.SetNumUninitialized(UncompressedSize);
+		if (!FCompression::UncompressMemory(NAME_Zlib, Decoded.GetData(), int64(UncompressedSize),
+		                                    CompressedBytes.GetData(), int64(CompressedBytes.Num())))
+		{
+			OutError = TEXT("Could not decompress imported content.");
+			return false;
+		}
+		DecodedBytes = MoveTemp(Decoded);
+		bDecodedBytesCached = true;
+	}
+	OutBytes = &DecodedBytes;
+	return true;
+}
+
+const TArray<uint8>& UNativeWebContentAsset::GetBytes() const
+{
+	const TArray<uint8>* Result = nullptr;
+	FString Error;
+	if (TryGetBytes(Result, Error)) return *Result;
+	static const TArray<uint8> Empty;
+	return Empty;
+}
 
 #if WITH_EDITOR
 void UNativeWebContentAsset::SetImportedContent(TArray<uint8>&& InBytes, FString InFilename)
 {
-	Bytes = MoveTemp(InBytes);
-	ImportedFilename = InFilename;
+	FString NewHash = HashImportedBytes(InBytes);
+	Bytes.Reset();
+	CompressedBytes.Reset();
+	DecodedBytes.Reset();
+	bDecodedBytesCached = false;
+	UncompressedSize = 0;
+	if (!InBytes.IsEmpty() && InBytes.Num() <= MaxCompressedPayloadSize)
+	{
+		const int32 Bound = FCompression::CompressMemoryBound(NAME_Zlib, InBytes.Num());
+		if (Bound > 0)
+		{
+			TArray<uint8> Compressed;
+			Compressed.SetNumUninitialized(Bound);
+			int32 CompressedSize = Bound;
+			if (FCompression::CompressMemory(NAME_Zlib, Compressed.GetData(), CompressedSize,
+			                                 InBytes.GetData(), InBytes.Num()) && CompressedSize < InBytes.Num())
+			{
+				Compressed.SetNum(CompressedSize);
+				CompressedBytes = MoveTemp(Compressed);
+				UncompressedSize = InBytes.Num();
+			}
+		}
+	}
+	if (CompressedBytes.IsEmpty()) Bytes = MoveTemp(InBytes);
+	ImportedFilename = MoveTemp(InFilename);
+	ContentHash = MoveTemp(NewHash);
+	RefreshImportedMetadata();
+}
+
+void UNativeWebContentAsset::PostEditUndo()
+{
+	Super::PostEditUndo();
+	DecodedBytes.Reset();
+	bDecodedBytesCached = false;
+	RefreshImportedMetadata();
+}
+
+void UNativeWebContentAsset::PreSave(FObjectPreSaveContext SaveContext)
+{
+	// Older assets keep their original Bytes property until they are next saved or cooked.
+	if (!Bytes.IsEmpty() && CompressedBytes.IsEmpty() && UncompressedSize == 0)
+	{
+		TArray<uint8> LegacyBytes = MoveTemp(Bytes);
+		SetImportedContent(MoveTemp(LegacyBytes), FString(ImportedFilename));
+	}
+	RefreshImportedMetadata();
+	Super::PreSave(SaveContext);
 }
 #endif
 

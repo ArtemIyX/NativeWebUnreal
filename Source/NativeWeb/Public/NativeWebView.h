@@ -28,6 +28,11 @@ class FAffineUiScriptInstance;
  */
 class SNativeWebView;
 class UNativeWebLocalPlayerSubsystem;
+class ULocalPlayer;
+class UWorld;
+class UGameViewportClient;
+class SViewport;
+class FViewport;
 
 UCLASS(BlueprintType)
 /**
@@ -434,6 +439,13 @@ private:
 	bool StartRequestedPresenter(FNativeWebError& OutError);
 	bool StartSlatePresenter(FNativeWebError& OutError);
 	void RemoveSlatePresenter();
+	void CleanupPresentationBinding();
+	void RefreshPresentationForOwner();
+	void SuspendPresentationForWorld(UWorld* World);
+	void RecordOwnerBinding(UWorld* World, UGameViewportClient* ViewportClient,
+		const TSharedPtr<SViewport>& ViewportWidget, FViewport* NativeViewport);
+	bool IsOwnerBindingReady(UWorld*& OutWorld, UGameViewportClient*& OutViewportClient,
+		TSharedPtr<SViewport>& OutViewportWidget, FViewport*& OutNativeViewport) const;
 	void CompletePendingPresentation();
 	void SetPresentationFailure(const FString& Reason, bool bTryFallback);
 	/**
@@ -500,6 +512,11 @@ private:
 	TSharedPtr<SNativeWebView> Attachment;
 	TUniquePtr<class FNativeWebGpuPresenter> GpuPresenter;
 	TWeakObjectPtr<ULocalPlayer> OwningPlayer;
+	TWeakObjectPtr<UWorld> BoundWorld;
+	TWeakObjectPtr<UWorld> TearingDownWorld;
+	TWeakObjectPtr<UGameViewportClient> BoundViewportClient;
+	TWeakPtr<SViewport> BoundViewportWidget;
+	FViewport* BoundNativeViewport = nullptr;
 	FNativeWebMessageReceived MessageReceived;
 	FNativeWebViewError Error;
 	FNativeWebPresentationChanged PresentationChanged;
@@ -516,6 +533,8 @@ private:
 	bool bPresentationPending = false;
 	bool bPresentationFallbackActive = false;
 	bool bAllowPresentationFallback = true;
+	bool bWantsPresentation = false;
+	bool bPresentationBindingAttempted = false;
 	bool bClosed = false;
 	bool bInitialized = false;
 	uint64 Generation = 1;

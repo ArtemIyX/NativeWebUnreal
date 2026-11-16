@@ -7,7 +7,38 @@
 #include "Input/NativeWebInputRouting.h"
 #include "NativeWebView.h"
 #include "Framework/Application/SlateApplication.h"
-#include "Widgets/Images/SImage.h"
+#include "Framework/Application/SlateUser.h"
+#include "Rendering/DrawElements.h"
+#include "Widgets/SLeafWidget.h"
+
+class SNativeWebPremultipliedImage final : public SLeafWidget
+{
+public:
+	SLATE_BEGIN_ARGS(SNativeWebPremultipliedImage) {}
+		SLATE_ARGUMENT(const FSlateBrush*, Image)
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& Args) { Image = Args._Image; }
+
+	virtual FVector2D ComputeDesiredSize(float) const override
+	{
+		return Image ? Image->ImageSize : FVector2D::ZeroVector;
+	}
+
+	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& Geometry, const FSlateRect& CullingRect,
+		FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& WidgetStyle,
+		bool bParentEnabled) const override
+	{
+		if (!Image || !Image->GetResourceObject()) return LayerId;
+		const ESlateDrawEffect DrawEffects = bParentEnabled ? ESlateDrawEffect::None : ESlateDrawEffect::DisabledEffect;
+		FSlateDrawElement::MakeBox(OutDrawElements, LayerId, Geometry.ToPaintGeometry(), Image,
+			DrawEffects | ESlateDrawEffect::PreMultipliedAlpha, WidgetStyle.GetColorAndOpacityTint());
+		return LayerId;
+	}
+
+private:
+	const FSlateBrush* Image = nullptr;
+};
 
 void SNativeWebView::Construct(const FArguments& Args)
 {
@@ -18,7 +49,7 @@ void SNativeWebView::Construct(const FArguments& Args)
 	UE_LOG(LogNativeWebViewport, Verbose, TEXT("Constructing Slate attachment (view=%s surface=%s)."),
 	       ViewObject ? *ViewObject->GetName() : TEXT("<null>"), Surface.IsValid() ? TEXT("valid") : TEXT("null"));
 	SetCanTick(true);
-	ChildSlot[SAssignNew(Image, SImage).Image(&Brush).Visibility(EVisibility::HitTestInvisible)];
+	ChildSlot[SAssignNew(Image, SNativeWebPremultipliedImage).Image(&Brush).Visibility(EVisibility::HitTestInvisible)];
 }
 
 void SNativeWebView::SetTexture(UTextureRenderTarget2D* Texture)
@@ -37,7 +68,7 @@ void SNativeWebView::SetVisible(bool bInVisible)
 	if (bVisible == bInVisible) return;
 	UE_LOG(LogNativeWebViewport, Verbose, TEXT("Slate attachment visibility changed to %s."),
 	       bInVisible ? TEXT("visible") : TEXT("collapsed"));
-	if (!bVisible) ReleaseInput();
+	if (bVisible && !bInVisible) ReleaseInput();
 	bVisible = bInVisible;
 	SetVisibility(bVisible ? EVisibility::Visible : EVisibility::Collapsed);
 }
@@ -53,7 +84,20 @@ void SNativeWebView::ReleaseInput(const bool bPreserveKeyboardFocus)
 		bPointerPressed = false;
 		Forward({EAffineUiInputKind::MouseUp, FVector2D(-1.0, -1.0)});
 	}
-	if (HasMouseCapture()) FSlateApplication::Get().ReleaseAllPointerCapture();
+	if (CapturedUserIndex != INDEX_NONE && CapturedPointerIndex != INDEX_NONE && FSlateApplication::IsInitialized())
+	{
+		if (TSharedPtr<FSlateUser> User = FSlateApplication::Get().GetUser(CapturedUserIndex))
+		{
+			const FWidgetPath CaptorPath = User->GetCaptorPath(CapturedPointerIndex);
+			if (CaptorPath.IsValid() && CaptorPath.Widgets.Num() > 0 &&
+				&CaptorPath.Widgets.Last().Widget.Get() == static_cast<SWidget*>(this))
+			{
+				User->ReleaseCapture(CapturedPointerIndex);
+			}
+		}
+		CapturedUserIndex = INDEX_NONE;
+		CapturedPointerIndex = INDEX_NONE;
+	}
 	if (bPreserveKeyboardFocus) return;
 	if (HasKeyboardFocus()) FSlateApplication::Get().ClearKeyboardFocus(EFocusCause::SetDirectly);
 	else Forward({EAffineUiInputKind::FocusLost});
@@ -141,6 +185,8 @@ FReply SNativeWebView::OnMouseButtonDown(const FGeometry& Geometry, const FPoint
 		EAffineUiInputKind::MouseDown, Geometry, Event))
 		return FReply::Unhandled();
 	bPointerPressed = true;
+	CapturedUserIndex = Event.GetUserIndex();
+	CapturedPointerIndex = Event.GetPointerIndex();
 	UE_LOG(LogNativeWebInput, Verbose, TEXT("Slate pointer press captured; requesting web view keyboard focus."));
 	return FReply::Handled().CaptureMouse(AsShared()).SetUserFocus(AsShared(), EFocusCause::Mouse);
 }
@@ -154,6 +200,8 @@ FReply SNativeWebView::OnMouseButtonUp(const FGeometry& Geometry, const FPointer
 {
 	if (!bPointerPressed || Event.GetEffectingButton() != EKeys::LeftMouseButton) return FReply::Unhandled();
 	bPointerPressed = false;
+	CapturedUserIndex = INDEX_NONE;
+	CapturedPointerIndex = INDEX_NONE;
 	UE_LOG(LogNativeWebInput, Verbose, TEXT("Slate pointer released; releasing pointer capture."));
 	ForwardPointer(EAffineUiInputKind::MouseUp, Geometry, Event);
 	return FReply::Handled().ReleaseMouseCapture();

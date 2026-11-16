@@ -14,22 +14,60 @@ FVertexOutput MainVS(uint VertexId : SV_VertexID)
 }
 
 Texture2D WebTexture;
-SamplerState WebSampler;
+Texture2D SceneTexture;
 float4 DrawRect;
-uint EncodeOutputSrgb;
+uint CompositeInShader;
+
+float3 DecodeSrgb(float3 Color)
+{
+	Color = saturate(Color);
+	return select(Color > 0.04045, pow((Color + 0.055) / 1.055, 2.4), Color / 12.92);
+}
+
+float3 EncodeSrgb(float3 Color)
+{
+	Color = saturate(Color);
+	return select(Color > 0.0031308, 1.055 * pow(Color, 1.0 / 2.4) - 0.055, 12.92 * Color);
+}
+
+float4 ReadAssociatedTexel(int2 Position)
+{
+	uint Width, Height;
+	WebTexture.GetDimensions(Width, Height);
+	Position = clamp(Position, int2(0, 0), int2(Width, Height) - 1);
+	float4 Stored = WebTexture.Load(int3(Position, 0));
+	float Alpha = saturate(Stored.a);
+	if (Alpha <= 0.0) return 0.0;
+	float3 AssociatedDisplay = EncodeSrgb(Stored.rgb);
+	float3 StraightLinear = DecodeSrgb(saturate(AssociatedDisplay / Alpha));
+	return float4(StraightLinear * Alpha, Alpha);
+}
+
+float4 SampleAssociatedLinear(float2 Uv)
+{
+	uint Width, Height;
+	WebTexture.GetDimensions(Width, Height);
+	float2 Texel = saturate(Uv) * float2(Width, Height) - 0.5;
+	int2 Base = int2(floor(Texel));
+	float2 Blend = frac(Texel);
+	float4 A = ReadAssociatedTexel(Base);
+	float4 B = ReadAssociatedTexel(Base + int2(1, 0));
+	float4 C = ReadAssociatedTexel(Base + int2(0, 1));
+	float4 D = ReadAssociatedTexel(Base + int2(1, 1));
+	return lerp(lerp(A, B, Blend.x), lerp(C, D, Blend.x), Blend.y);
+}
 
 float4 MainPS(FVertexOutput Input) : SV_Target0
 {
 	// SV_Position already includes the half-pixel offset to the pixel center.
 	float2 Uv = saturate((Input.Position.xy - DrawRect.xy) / DrawRect.zw);
-	float3 Color = WebTexture.SampleLevel(WebSampler, Uv, 0).rgb;
-	// The sRGB SRV returns linear RGB. Encode only if the target view won't.
-	if (EncodeOutputSrgb != 0)
+	float4 Source = SampleAssociatedLinear(Uv);
+	if (Source.a <= 0.0) discard;
+	if (CompositeInShader != 0)
 	{
-		Color = saturate(Color);
-		Color = select(Color > 0.0031308,
-		               1.055 * pow(Color, 1.0 / 2.4) - 0.055,
-		               12.92 * Color);
+		float4 Destination = SceneTexture.Load(int3(int2(Input.Position.xy), 0));
+		float3 DestinationLinear = DecodeSrgb(Destination.rgb);
+		return float4(EncodeSrgb(Source.rgb + DestinationLinear * (1.0 - Source.a)), Destination.a);
 	}
-	return float4(Color, 1.0);
+	return Source;
 }

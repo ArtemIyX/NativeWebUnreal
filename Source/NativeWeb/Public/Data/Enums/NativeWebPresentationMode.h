@@ -13,7 +13,7 @@
 UENUM(BlueprintType)
 enum class ENativeWebPresentationMode : uint8
 {
-	/** @brief Present the opaque output texture in the game viewport through the UE render graph. */
+	/** @brief Composite the alpha-bearing output texture over the game viewport through the UE render graph. */
 	GpuViewport UMETA(DisplayName="GPU Viewport"),
 	/** @brief Present and route input through the legacy Slate image widget. */
 	Slate UMETA(DisplayName="Slate"),

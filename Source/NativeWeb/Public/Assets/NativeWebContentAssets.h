@@ -10,21 +10,49 @@ class NATIVEWEB_API UNativeWebContentAsset : public UDataAsset
 	GENERATED_BODY()
 
 public:
-	const TArray<uint8>& GetBytes() const { return Bytes; }
+	virtual void PostLoad() override;
+	/** Returns the original imported bytes. Compressed payloads are decoded on first access. */
+	const TArray<uint8>& GetBytes() const;
+	/** Returns false if a compressed payload cannot be decoded. */
+	bool TryGetBytes(const TArray<uint8>*& OutBytes, FString& OutError) const;
+	int32 GetImportedSize() const { return CompressedBytes.IsEmpty() ? Bytes.Num() : UncompressedSize; }
+	bool HasStoredContent() const { return !Bytes.IsEmpty() || !CompressedBytes.IsEmpty() || UncompressedSize != 0; }
 	const FString& GetImportedFilename() const { return ImportedFilename; }
+	const FString& GetContentHash() const { return ContentHash; }
 	virtual FName GetAuthoringKind() const PURE_VIRTUAL(UNativeWebContentAsset::GetAuthoringKind, return NAME_None;);
 	static bool DecodeTextPayload(const TArray<uint8>& Bytes, FString& OutText, FString& OutReason);
 
 #if WITH_EDITOR
 	void SetImportedContent(TArray<uint8>&& InBytes, FString InFilename);
+	virtual void PostEditUndo() override;
+	virtual void PreSave(FObjectPreSaveContext SaveContext) override;
 #endif
 
 private:
+	void RefreshImportedMetadata();
 	UPROPERTY(VisibleAnywhere, Category="Imported Content", meta=(AllowPrivateAccess="true", HideInDetailPanel))
 	TArray<uint8> Bytes;
 
-	UPROPERTY(VisibleAnywhere, Category="Imported Content", meta=(AllowPrivateAccess="true", HideInDetailPanel))
+	/** Zlib-compressed imported bytes; Bytes remains the legacy/raw fallback. */
+	UPROPERTY()
+	TArray<uint8> CompressedBytes;
+
+	UPROPERTY()
+	int32 UncompressedSize = 0;
+
+	mutable TArray<uint8> DecodedBytes;
+	mutable bool bDecodedBytesCached = false;
+
+	UPROPERTY(VisibleAnywhere, Category="Imported Content", meta=(AllowPrivateAccess="true", DisplayName="Imported Filename"))
 	FString ImportedFilename;
+
+	/** Size of the original file before compression, in KiB (1024 bytes). */
+	UPROPERTY(VisibleAnywhere, Transient, Category="Imported Content", meta=(AllowPrivateAccess="true", DisplayName="Imported Size (KB)"))
+	double ImportedSizeKB = 0.0;
+
+	/** SHA-256 of the exact original file bytes; available as an asset-registry tag. */
+	UPROPERTY(VisibleAnywhere, AssetRegistrySearchable, Category="Imported Content", meta=(AllowPrivateAccess="true", DisplayName="Content SHA-256"))
+	FString ContentHash;
 };
 
 UCLASS(BlueprintType)

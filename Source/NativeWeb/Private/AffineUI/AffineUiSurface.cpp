@@ -125,7 +125,11 @@ TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> FAffineUiSurface::Create(
 	TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> Surface = MakeShareable(new FAffineUiSurface());
 	Surface->Impl->Desired = Desc;
 	TMap<FString, TArray<uint8>> PreloadedFonts;
-	if (!Desc.FontDirectory.IsEmpty())
+	if (Desc.FontAssets.IsValid())
+	{
+		Surface->Impl->FontAssets = Desc.FontAssets;
+	}
+	else if (!Desc.FontDirectory.IsEmpty())
 	{
 		TArray<FString> FontFiles;
 		IFileManager::Get().FindFiles(FontFiles, *FPaths::Combine(Desc.FontDirectory, TEXT("*.ttf")), true, false);
@@ -146,8 +150,11 @@ TSharedPtr<FAffineUiSurface, ESPMode::ThreadSafe> FAffineUiSurface::Create(
 			}
 		}
 	}
-	Surface->Impl->FontAssets = MakeShared<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe>(
-		MoveTemp(PreloadedFonts));
+	if (!Surface->Impl->FontAssets.IsValid())
+	{
+		Surface->Impl->FontAssets = MakeShared<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe>(
+			MoveTemp(PreloadedFonts));
+	}
 	UE_LOG(LogNativeWebAffineUi, Display, TEXT("AffineUI surface created; preloaded %d font asset(s)."),
 	       Surface->Impl->FontAssets->Num());
 	Surface->StartPending();

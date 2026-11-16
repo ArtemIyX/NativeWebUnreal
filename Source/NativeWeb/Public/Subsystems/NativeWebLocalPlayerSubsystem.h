@@ -9,11 +9,16 @@
 
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
+#include "Engine/StreamableManager.h"
+#include "Assets/NativeWebAppAsset.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
 #include "NativeWebView.h"
 #include "Data/Structs/NativeWebPresentationConfig.h"
 #include "Data/Structs/NativeWebSurfaceConfig.h"
 #include "NativeWebLocalPlayerSubsystem.generated.h"
+
+struct FNativeWebResolvedAppSource;
+DECLARE_DELEGATE_TwoParams(FNativeWebCreateAppViewComplete, UNativeWebView*, const FNativeWebError&);
 
 /**
  * @brief Local-player owner and factory for reusable NativeWeb views.
@@ -100,6 +105,25 @@ public:
 		const FNativeWebPresentationConfig& PresentationConfig,
 		FNativeWebError& OutError);
 
+	/** @brief Creates a view from selected primary data asset sources; initialization and requested startup evaluation complete before publication. */
+	UFUNCTION(BlueprintCallable, Category="NativeWeb|App")
+	UNativeWebView* CreateAppView(FName Name, UNativeWebAppAsset* App,
+	                              const FNativeWebSurfaceConfig& SurfaceConfig,
+	                              const FNativeWebPresentationConfig& PresentationConfig,
+	                              FNativeWebError& OutError);
+
+	/** @brief Asynchronously loads an app and its selected soft dependencies. Immediate validation failures may complete synchronously on the game thread. */
+	void CreateAppViewAsync(TSoftObjectPtr<UNativeWebAppAsset> App, FName Name,
+	                        const FNativeWebSurfaceConfig& SurfaceConfig,
+	                        const FNativeWebPresentationConfig& PresentationConfig,
+	                        FNativeWebCreateAppViewComplete Completion);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	void SetAutomationLoadCompletionHolds(bool bHoldAfterApp, bool bHoldAfterDependencies);
+	void ReleaseAutomationLoadCompletionHold(FName Name, bool bAfterDependencies);
+	bool IsAutomationLoadCompletionHeld(FName Name, bool bAfterDependencies) const;
+#endif
+
 	/**
 	 * @brief Looks up an open view by its subsystem-local name.
 	 * @param Name Name supplied when the view was created.
@@ -133,15 +157,39 @@ public:
 	bool DestroyView(FName Name);
 
 private:
+	struct FPendingAppRequest;
 	UNativeWebView* CreateConfiguredView(FName Name, const FString& Html, const FString& Css,
 	                                     const FString& PackagedAssetRoot,
 	                                     const FNativeWebSurfaceConfig& SurfaceConfig,
 	                                     const FNativeWebPresentationConfig& PresentationConfig,
 	                                     FNativeWebError& OutError);
+	UNativeWebView* CreateResolvedAppView(FName Name, const FNativeWebResolvedAppSource& Source,
+	                                      const FNativeWebSurfaceConfig& SurfaceConfig,
+	                                      const FNativeWebPresentationConfig& PresentationConfig,
+	                                      uint64 RequestGeneration, FNativeWebError& OutError);
+	void BeginAppDependencyLoad(FName Name, uint64 RequestGeneration);
+	void CompletePendingApp(FName Name, uint64 RequestGeneration, UNativeWebView* View,
+	                        const FNativeWebError& Error);
+	bool IsRequestActive(FName Name, uint64 RequestGeneration) const;
+	bool ValidateViewOptions(FName Name, const FNativeWebSurfaceConfig& SurfaceConfig,
+	                         const FNativeWebPresentationConfig& PresentationConfig,
+	                         FNativeWebError& OutError) const;
+	void CompleteAppDependencyLoad(FName Name, uint64 RequestGeneration);
 
 	UPROPERTY(Transient)
 	/** @brief Reflected data field `Views`. */
 	TMap<FName, TObjectPtr<UNativeWebView>> Views;
+	TSet<FName> ReservedNames;
+	TMap<FName, uint64> ReservedAppRequests;
+	TMap<FName, TSharedPtr<FPendingAppRequest>> PendingAppRequests;
+	uint64 NextRequestGeneration = 1;
+	bool bShuttingDown = false;
+#if WITH_DEV_AUTOMATION_TESTS
+	bool bHoldAppCompletionForTests = false;
+	bool bHoldDependencyCompletionForTests = false;
+	TSet<FName> HeldAppCompletionsForTests;
+	TSet<FName> HeldDependencyCompletionsForTests;
+#endif
 	FTSTicker::FDelegateHandle TickHandle;
 	bool Tick(float DeltaTime);
 };

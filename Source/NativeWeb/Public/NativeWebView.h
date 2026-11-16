@@ -251,6 +251,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category="NativeWeb")
 	bool EvaluateScript(const FString& Source, const FString& SourceName, FNativeWebError& OutError);
 
+	/** @brief Evaluates the startup script selected by a native web app asset, or reports NoAppScript when absent. */
+	UFUNCTION(BlueprintCallable, Category="NativeWeb|App")
+	bool EvaluateAppScript(FNativeWebError& OutError);
+
 	/**
 	 * @brief Loads packaged document.
 	* @param HtmlRelativePath Input supplied by the caller; references are consumed only for the duration of this call unless the API states otherwise.
@@ -424,7 +428,9 @@ private:
 	bool Initialize(FName InName, const FString& Html, const FString& Css, const FString& InPackagedAssetRoot,
 	                const FNativeWebSurfaceConfig& SurfaceConfig,
 	                const FNativeWebPresentationConfig& PresentationConfig, ULocalPlayer* Player,
-	                FNativeWebError& OutError);
+	                FNativeWebError& OutError,
+	                TSharedPtr<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe> FontAssets = nullptr);
+	void SetAppScript(FString Source, FString SourceName, bool bHasScript);
 	bool StartRequestedPresenter(FNativeWebError& OutError);
 	bool StartSlatePresenter(FNativeWebError& OutError);
 	void RemoveSlatePresenter();
@@ -484,6 +490,9 @@ private:
 	
 	FName ViewName = NAME_None;
 	FString PackagedAssetRoot;
+	FString AppJavaScript;
+	FString AppJavaScriptSourceName;
+	bool bHasAppJavaScript = false;
 #if PLATFORM_WINDOWS
 	TUniquePtr<FAffineUiScriptInstance> Script;
 #endif

@@ -55,7 +55,8 @@ bool UNativeWebView::Initialize(FName InName, const FString& Html, const FString
                                 const FString& InPackagedAssetRoot,
                                 const FNativeWebSurfaceConfig& SurfaceConfig,
                                 const FNativeWebPresentationConfig& PresentationConfig, ULocalPlayer* Player,
-                                FNativeWebError& OutError)
+                                FNativeWebError& OutError,
+                                TSharedPtr<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe> FontAssets)
 {
 	check(IsInGameThread());
 	UE_LOG(LogNativeWebView, Log, TEXT("Initializing view '%s' (size=%dx%d, dpi=%.2f)."),
@@ -79,6 +80,7 @@ bool UNativeWebView::Initialize(FName InName, const FString& Html, const FString
 	Desc.ClearColor = SurfaceConfig.ClearColor;
 	Desc.Content.Html = Html;
 	Desc.Content.Css = Css;
+	Desc.FontAssets = MoveTemp(FontAssets);
 	if (!PackagedAssetRoot.IsEmpty()) Desc.FontDirectory = FPaths::Combine(PackagedAssetRoot, TEXT("fonts"));
 	FString ErrorMessage;
 	UGameInstance* GameInstance = IsValid(Player) ? Player->GetGameInstance() : nullptr;
@@ -599,6 +601,31 @@ bool UNativeWebView::EvaluateScript(const FString& Source, const FString& Source
 #endif
 }
 
+void UNativeWebView::SetAppScript(FString Source, FString SourceName, bool bHasScript)
+{
+	check(IsInGameThread());
+	AppJavaScript = MoveTemp(Source);
+	AppJavaScriptSourceName = MoveTemp(SourceName);
+	bHasAppJavaScript = bHasScript;
+}
+
+bool UNativeWebView::EvaluateAppScript(FNativeWebError& OutError)
+{
+	check(IsInGameThread());
+	OutError = {};
+	if (bClosed || !Script)
+	{
+		OutError = BuildNativeWebError(TEXT("Closed"), TEXT("The NativeWeb view is closed."), ViewName);
+		return false;
+	}
+	if (!bHasAppJavaScript)
+	{
+		OutError = BuildNativeWebError(TEXT("NoAppScript"), TEXT("No application JavaScript source was selected."), ViewName);
+		return false;
+	}
+	return EvaluateScript(AppJavaScript, AppJavaScriptSourceName, OutError);
+}
+
 bool UNativeWebView::LoadDocumentFiles(const FString& HtmlPath, const FString& CssPath, FNativeWebError& OutError)
 {
 	check(IsInGameThread());
@@ -877,6 +904,9 @@ void UNativeWebView::Close()
 		}
 		bClosed = true;
 		bInitialized = false;
+		AppJavaScript.Reset();
+		AppJavaScriptSourceName.Reset();
+		bHasAppJavaScript = false;
 		ProducerMessages.Reset();
 		ProducerBytes = 0;
 	}

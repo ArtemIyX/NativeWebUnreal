@@ -185,12 +185,6 @@ namespace
 					State->SurfaceIndex == 0 ? State->Surface : State->OtherSurface;
 				UTextureRenderTarget2D* Output = CurrentSurface.IsValid() ? CurrentSurface->GetOutputTexture() : nullptr;
 				FTextureRenderTargetResource* Resource = Output ? Output->GameThread_GetRenderTargetResource() : nullptr;
-				FTextureRHIRef OutputRhi = Resource ? Resource->GetRenderTargetTexture() : FTextureRHIRef();
-				if (!OutputRhi.IsValid())
-				{
-					State->Test->AddError(TEXT("The surface did not publish an RHI output texture after redraw."));
-					return Finish();
-				}
 				State->Readback = MakeShared<FRHIGPUTextureReadback, ESPMode::ThreadSafe>(TEXT("NativeWebImagePixelTest"));
 				const TSharedPtr<FRHIGPUTextureReadback, ESPMode::ThreadSafe> Readback = State->Readback;
 				{
@@ -198,8 +192,18 @@ namespace
 					State->bReadbackQueued = true;
 				}
 				ENQUEUE_RENDER_COMMAND(NativeWebImagePixelTestReadback)(
-					[State = this->State, Readback, OutputRhi](FRHICommandListImmediate& RHICmdList)
+					[State = this->State, Readback, Resource](FRHICommandListImmediate& RHICmdList)
 					{
+						const FTextureRHIRef OutputRhi = Resource ? Resource->GetRenderTargetTexture() : FTextureRHIRef();
+						if (!OutputRhi.IsValid())
+						{
+							FScopeLock Lock(&State->ReadbackMutex);
+							State->ReadbackError = TEXT("The surface did not publish an RHI output texture after redraw.");
+							State->bReadbackCopyRecorded = true;
+							State->bReadbackComplete = true;
+							State->bReadbackPollQueued = false;
+							return;
+						}
 						RHICmdList.Transition(FRHITransitionInfo(OutputRhi.GetReference(), ERHIAccess::SRVMask,
 							ERHIAccess::CopySrc));
 						Readback->EnqueueCopy(RHICmdList, OutputRhi.GetReference(), FIntVector::ZeroValue, 0,

@@ -173,7 +173,11 @@ public:
 	}
 
 	bool IsFinalized() const { return bFinalized.Load(); }
-	bool HasPendingRetirement() const { return bRetirementPending.Load(); }
+	bool HasPendingRetirement() const
+	{
+		return !bFinalized.Load() && (bShutdownRequested.Load() || bRetirementPending.Load());
+	}
+	void RequestShutdown() { bShutdownRequested.Store(true); }
 	void MarkRetirementPending() { bRetirementPending.Store(true); }
 	void PollRetirements(FRHICommandListImmediate& RHICmdList)
 	{
@@ -871,6 +875,7 @@ private:
 	TRefCountPtr<ID3D11Query> LastFrameMarker;
 	bool bClosing = false;
 	TAtomic<bool> bFinalized{false};
+	TAtomic<bool> bShutdownRequested{false};
 	TAtomic<bool> bRetirementPending{false};
 	FIntPoint RenderedSize = FIntPoint::ZeroValue;
 	float RenderedDpiScale = 1.0f;
@@ -884,6 +889,7 @@ public:
 	void AdvanceRetirement(FRHICommandListImmediate&) {}
 	bool IsFinalized() const { return true; }
 	bool HasPendingRetirement() const { return false; }
+	void RequestShutdown() {}
 	void PollRetirements(FRHICommandListImmediate&) {}
 };
 #endif
@@ -1097,8 +1103,8 @@ void FAffineUiSurfaceRenderer::Shutdown()
 {
 	if (!State.IsValid()) return;
 	UE_LOG(LogNativeWebRender, Verbose, TEXT("Starting asynchronous RHI image retirement."));
-	State->MarkRetirementPending();
-	RetiringStates.Add(State);
+	State->RequestShutdown();
+	RetiringStates.AddUnique(State);
 	if (!RetirementQueueTicker.IsValid())
 		RetirementQueueTicker = FTSTicker::GetCoreTicker().AddTicker(
 			FTickerDelegate::CreateStatic(&FAffineUiSurfaceRenderer::TickRetirementQueue), 0.016f);

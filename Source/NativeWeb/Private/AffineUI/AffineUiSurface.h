@@ -133,6 +133,7 @@ struct NATIVEWEB_API FAffineUiSurfaceDesc
 	FColor ClearColor = FColor(0, 0, 0, 255);
 	FAffineUiContent Content;
 	FString FontDirectory;
+	TSharedPtr<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe> FontAssets;
 };
 
 DECLARE_DELEGATE_OneParam(FAffineUiTextureReady, UTextureRenderTarget2D*);

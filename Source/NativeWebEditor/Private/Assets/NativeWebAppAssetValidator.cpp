@@ -94,7 +94,8 @@ EDataValidationResult UNativeWebAppAssetValidator::ValidateLoadedAsset_Implement
 		if (!Font) continue;
 		const FString Filename = Font->GetImportedFilename();
 		FString Reason;
-		if (!UNativeWebFontAsset::ValidatePayload(Filename, Font->GetBytes(), Reason))
+		const TArray<uint8>* FontBytes = nullptr;
+		if (!Font->TryGetBytes(FontBytes, Reason) || !UNativeWebFontAsset::ValidatePayload(Filename, *FontBytes, Reason))
 		{
 			AssetFails(App, FText::FromString(Reason));
 			return EDataValidationResult::Invalid;

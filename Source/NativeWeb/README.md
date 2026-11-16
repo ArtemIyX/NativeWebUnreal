@@ -361,8 +361,12 @@ is enabled; call `EvaluateAppScript` to run it later or again.
 Create native `NativeWeb HTML Asset`, `NativeWeb CSS Asset`,
 `NativeWeb JavaScript Asset`, or `NativeWeb Font Asset` objects with the
 Content Browser's Data Asset factory. Their Details panel has Import, Export,
-and Clear actions. Imports store exact source bytes, preserve UTF-8 BOMs for
-export, and participate in editor undo/redo. Text input must be non-empty valid
+and Clear actions. Imports preserve exact source bytes and UTF-8 BOMs for
+export and participate in editor undo/redo. Compressible HTML, CSS, JavaScript,
+and font bytes are stored with zlib and decoded on demand; incompressible or
+larger-than-256 MiB payloads remain raw. Existing raw assets remain readable and
+are compressed when next saved or cooked. The displayed size is the original
+uncompressed size. Text input must be non-empty valid
 UTF-8 after an optional BOM and cannot contain NUL. Fonts must have a safe
 `.ttf` or `.otf` leaf filename and a bounded SFNT table directory. Duplicate
 font filenames are checked case-insensitively within each app.

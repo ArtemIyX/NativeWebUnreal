@@ -41,7 +41,14 @@ namespace
 			SetError(Error, LoadCode, TEXT("The selected content asset could not be loaded."), SourceName);
 			return false;
 		}
-		return DecodeText(Asset->GetBytes(), InvalidCode, SourceName, OutText, Error);
+		const TArray<uint8>* Bytes = nullptr;
+		FString Reason;
+		if (!Asset->TryGetBytes(Bytes, Reason))
+		{
+			SetError(Error, InvalidCode, Reason, SourceName);
+			return false;
+		}
+		return DecodeText(*Bytes, InvalidCode, SourceName, OutText, Error);
 	}
 
 	bool ContainsNul(const FString& Value)
@@ -177,7 +184,8 @@ namespace NativeWebAppSource
 			}
 			const FString Filename = Font->GetImportedFilename();
 			FString Reason;
-			if (!IsValidFont(Filename, Font->GetBytes(), Reason))
+			const TArray<uint8>* FontBytes = nullptr;
+			if (!Font->TryGetBytes(FontBytes, Reason) || !IsValidFont(Filename, *FontBytes, Reason))
 			{
 				SetError(OutError, TEXT("InvalidFontSource"), Reason, FontSource);
 				return false;
@@ -189,7 +197,7 @@ namespace NativeWebAppSource
 				return false;
 			}
 			OriginalAssets.Add(Key, FontSource);
-			Fonts.Add(FString(TEXT("fonts/")) + Filename, Font->GetBytes());
+			Fonts.Add(FString(TEXT("fonts/")) + Filename, *FontBytes);
 		}
 		OutSource.FontAssets = MakeShared<const TMap<FString, TArray<uint8>>, ESPMode::ThreadSafe>(MoveTemp(Fonts));
 		return true;

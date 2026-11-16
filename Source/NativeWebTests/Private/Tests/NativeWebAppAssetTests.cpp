@@ -111,4 +111,32 @@ bool FNativeWebAppSourceValidationTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebCompressedAppSourceTest,
+	"NativeWeb.AppAsset.CompressedHtmlSource",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FNativeWebCompressedAppSourceTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UNativeWebAppAsset* App = NewObject<UNativeWebAppAsset>();
+	UNativeWebHtmlAsset* Html = NewObject<UNativeWebHtmlAsset>();
+	FString Original = TEXT("<main>Hé ");
+	for (int32 Index = 0; Index < 2048; ++Index) Original += TEXT("content ");
+	Original += TEXT("</main>");
+	FTCHARToUTF8 Utf8(*Original);
+	TArray<uint8> Bytes;
+	Bytes.Append(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
+	Html->SetImportedContent(MoveTemp(Bytes), TEXT("index.html"));
+	App->AppId = TEXT("CompressedHtml");
+	App->HtmlMode = ENativeWebHtmlSourceMode::Asset;
+	App->HtmlAsset = Html;
+	FNativeWebAppSourceSnapshot Snapshot;
+	FNativeWebResolvedAppSource Source;
+	FNativeWebError Error;
+	TestTrue(TEXT("Compressed app source snapshot is valid"), NativeWebAppSource::BuildSnapshot(*App, Snapshot, Error));
+	TestTrue(TEXT("Compressed HTML resolves"), NativeWebAppSource::ResolveSnapshot(Snapshot, Source, Error));
+	TestEqual(TEXT("Resolved UTF-8 HTML matches imported text"), Source.Html, Original);
+	return true;
+}
+
 #endif

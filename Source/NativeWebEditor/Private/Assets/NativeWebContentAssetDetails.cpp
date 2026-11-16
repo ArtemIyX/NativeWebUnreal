@@ -102,7 +102,7 @@ void FNativeWebContentAssetDetails::CustomizeDetails(IDetailLayoutBuilder& Detai
 		.ValueContent()[SNew(STextBlock).Text_Lambda([Asset]()
 		{
 			const UNativeWebContentAsset* Current = Asset.Get();
-			const double Kilobytes = Current ? double(Current->GetBytes().Num()) / 1024.0 : 0.0;
+			const double Kilobytes = Current ? double(Current->GetImportedSize()) / 1024.0 : 0.0;
 			return FText::AsNumber(Kilobytes);
 		})];
 	}
@@ -120,7 +120,7 @@ void FNativeWebContentAssetDetails::CustomizeDetails(IDetailLayoutBuilder& Detai
 		+ SHorizontalBox::Slot().AutoWidth().Padding(2)
 		[
 			SNew(SButton).Text(FText::FromString(TEXT("Export")))
-			.IsEnabled_Lambda([Asset]() { const UNativeWebContentAsset* Current = Asset.Get(); return Current && !Current->GetBytes().IsEmpty(); })
+			.IsEnabled_Lambda([Asset]() { const UNativeWebContentAsset* Current = Asset.Get(); return Current && Current->GetImportedSize() > 0; })
 			.OnClicked_Lambda([Asset]()
 			{
 				RunDialogAction(Asset, true, false);
@@ -130,7 +130,7 @@ void FNativeWebContentAssetDetails::CustomizeDetails(IDetailLayoutBuilder& Detai
 		+ SHorizontalBox::Slot().AutoWidth().Padding(2)
 		[
 			SNew(SButton).Text(FText::FromString(TEXT("Clear")))
-			.IsEnabled_Lambda([Asset]() { const UNativeWebContentAsset* Current = Asset.Get(); return Current && (!Current->GetBytes().IsEmpty() || !Current->GetImportedFilename().IsEmpty()); })
+			.IsEnabled_Lambda([Asset]() { const UNativeWebContentAsset* Current = Asset.Get(); return Current && (Current->GetImportedSize() != 0 || !Current->GetImportedFilename().IsEmpty()); })
 			.OnClicked_Lambda([Asset]()
 			{
 				RunDialogAction(Asset, false, true);

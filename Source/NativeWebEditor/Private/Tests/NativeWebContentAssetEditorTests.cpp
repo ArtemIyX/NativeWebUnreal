@@ -12,7 +12,11 @@
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
+#include "Serialization/ObjectReader.h"
+#include "Serialization/ObjectWriter.h"
 #include "UObject/StrongObjectPtr.h"
+#include "UObject/UnrealType.h"
+#include "UObject/SavePackage.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNativeWebContentAssetImportExportUndoTest,
 	"NativeWeb.Editor.ContentImportExportClearAndTransactions",
@@ -32,6 +36,7 @@ bool FNativeWebContentAssetImportExportUndoTest::RunTest(const FString& Paramete
 	const FString ImportPath = FPaths::Combine(Root, TEXT("source.html"));
 	const FString ExportPath = FPaths::Combine(Root, TEXT("export.html"));
 	TArray<uint8> Original = {0xEF, 0xBB, 0xBF, '<', 'p', '>', 0xC3, 0xA9, '<', '/', 'p', '>'};
+	for (int32 Index = 0; Index < 4096; ++Index) Original.Add('x');
 	FFileHelper::SaveArrayToFile(Original, *ImportPath);
 	UPackage* Package = CreatePackage(*FString::Printf(TEXT("/Temp/NativeWebAssetTest_%s"), *Unique));
 	UNativeWebHtmlAsset* Asset = NewObject<UNativeWebHtmlAsset>(Package, FName(TEXT("Html")), RF_Transactional);
@@ -42,6 +47,51 @@ bool FNativeWebContentAssetImportExportUndoTest::RunTest(const FString& Paramete
 	TestTrue(TEXT("Import preserves BOM and source bytes"), NativeWebContentAssetActions::ImportFile(*Asset, ImportPath, Error));
 	TestEqual(TEXT("Imported filename is the source leaf"), Asset->GetImportedFilename(), FString(TEXT("source.html")));
 	TestEqual(TEXT("Imported payload byte count is exact"), Asset->GetBytes().Num(), Original.Num());
+	const FArrayProperty* RawProperty = FindFProperty<FArrayProperty>(UNativeWebContentAsset::StaticClass(), TEXT("Bytes"));
+	const FArrayProperty* CompressedProperty = FindFProperty<FArrayProperty>(UNativeWebContentAsset::StaticClass(), TEXT("CompressedBytes"));
+	if (TestNotNull(TEXT("Legacy byte property exists"), RawProperty) &&
+		TestNotNull(TEXT("Compressed byte property exists"), CompressedProperty))
+	{
+		const TArray<uint8>& StoredRaw = *RawProperty->ContainerPtrToValuePtr<TArray<uint8>>(Asset);
+		const TArray<uint8>& StoredCompressed = *CompressedProperty->ContainerPtrToValuePtr<TArray<uint8>>(Asset);
+		TestTrue(TEXT("Compressible content is stored without raw duplicate"), StoredRaw.IsEmpty());
+		TestTrue(TEXT("Compressed payload is smaller"), !StoredCompressed.IsEmpty() && StoredCompressed.Num() < Original.Num());
+	}
+	TestEqual(TEXT("Displayed imported size is uncompressed"), Asset->GetImportedSize(), Original.Num());
+	TArray<uint8> Serialized;
+	FObjectWriter Writer(Asset, Serialized);
+	UNativeWebHtmlAsset* Reloaded = NewObject<UNativeWebHtmlAsset>();
+	FObjectReader Reader(Reloaded, Serialized);
+	TestTrue(TEXT("Serialized compressed content reloads exactly"), Reloaded->GetBytes() == Original);
+	UNativeWebHtmlAsset* Damaged = NewObject<UNativeWebHtmlAsset>();
+	FObjectReader DamagedReader(Damaged, Serialized);
+	if (CompressedProperty)
+	{
+		TArray<uint8>& DamagedBytes = *CompressedProperty->ContainerPtrToValuePtr<TArray<uint8>>(Damaged);
+		DamagedBytes.Init(0, DamagedBytes.Num());
+		const TArray<uint8>* Decoded = nullptr;
+		FString DecodeError;
+		AddExpectedError(TEXT("FCompression::UncompressMemory - Failed to uncompress"), EAutomationExpectedErrorFlags::Contains, 1);
+		TestFalse(TEXT("Corrupt compressed content is reported"), Damaged->TryGetBytes(Decoded, DecodeError));
+		TestFalse(TEXT("Corrupt compressed content provides an error"), DecodeError.IsEmpty());
+	}
+	if (RawProperty && CompressedProperty)
+	{
+		UPackage* LegacyPackage = CreatePackage(*FString::Printf(TEXT("/Temp/NativeWebLegacy_%s"), *Unique));
+		UNativeWebHtmlAsset* Legacy = NewObject<UNativeWebHtmlAsset>(LegacyPackage, TEXT("Legacy"), RF_Public | RF_Standalone);
+		*RawProperty->ContainerPtrToValuePtr<TArray<uint8>>(Legacy) = Original;
+		TestTrue(TEXT("Legacy raw payload remains readable"), Legacy->GetBytes() == Original);
+		const FString LegacyPath = FPaths::Combine(Root, TEXT("legacy.uasset"));
+		FSavePackageArgs SaveArgs;
+		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+		SaveArgs.SaveFlags = SAVE_NoError;
+		TestTrue(TEXT("Legacy package saves"), UPackage::SavePackage(LegacyPackage, Legacy, *LegacyPath, SaveArgs));
+		TestTrue(TEXT("Saving migrates compressible legacy payload"),
+			!CompressedProperty->ContainerPtrToValuePtr<TArray<uint8>>(Legacy)->IsEmpty() &&
+			RawProperty->ContainerPtrToValuePtr<TArray<uint8>>(Legacy)->IsEmpty());
+		TestTrue(TEXT("Migrated legacy payload remains unchanged"), Legacy->GetBytes() == Original);
+		IFileManager::Get().Delete(*LegacyPath);
+	}
 	TestTrue(TEXT("Import dirties the asset package"), Package->IsDirty());
 	TestTrue(TEXT("Export writes the exact original bytes"), NativeWebContentAssetActions::ExportFile(*Asset, ExportPath, Error));
 	TArray<uint8> Exported;
